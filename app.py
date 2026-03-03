@@ -359,16 +359,17 @@ def generate_csv(rows, selected_columns):
 
 # ── PDF export ────────────────────────────────────────────────────────────────
 
-# Brand colours
-PDF_DARK   = colors.HexColor('#0a0e14')
-PDF_ACCENT = colors.HexColor('#00c8f0')
-PDF_MID    = colors.HexColor('#1a2535')
-PDF_LIGHT  = colors.HexColor('#e8f4f8')
-PDF_MUTED  = colors.HexColor('#7a9ab8')
+# Printer-friendly colours — white background, black text, minimal ink
 PDF_WHITE  = colors.white
-PDF_ROW_A  = colors.HexColor('#0f1822')
-PDF_ROW_B  = colors.HexColor('#141f2e')
-PDF_BORDER = colors.HexColor('#1e3040')
+PDF_BLACK  = colors.HexColor('#111111')
+PDF_ACCENT = colors.HexColor('#1a5fa8')   # Deep blue — header bar & accents
+PDF_HDR_BG = colors.HexColor('#1a5fa8')   # Table header background
+PDF_ROW_A  = colors.white                 # Odd rows: plain white
+PDF_ROW_B  = colors.HexColor('#f4f7fb')   # Even rows: very light blue-grey tint
+PDF_BORDER = colors.HexColor('#c8d8e8')   # Subtle grey-blue grid lines
+PDF_MUTED  = colors.HexColor('#5a7080')   # Muted text (meta, footer, N/A)
+PDF_DARK   = colors.white                 # Page background = white
+PDF_MID    = PDF_HDR_BG                   # Alias used in table header
 
 # Columns that are short enough to fit nicely in a table
 SHORT_COLS = {
@@ -405,7 +406,7 @@ def generate_pdf(rows, selected_columns, customer_name):
     # Custom paragraph styles
     title_style = ParagraphStyle(
         'Title', fontName='Helvetica-Bold', fontSize=18,
-        textColor=PDF_WHITE, spaceAfter=2,
+        textColor=PDF_BLACK, spaceAfter=10,
     )
     sub_style = ParagraphStyle(
         'Sub', fontName='Helvetica', fontSize=9,
@@ -413,11 +414,11 @@ def generate_pdf(rows, selected_columns, customer_name):
     )
     cell_style = ParagraphStyle(
         'Cell', fontName='Helvetica', fontSize=7,
-        textColor=PDF_LIGHT, leading=9, wordWrap='LTR',
+        textColor=PDF_BLACK, leading=9, wordWrap='LTR',
     )
     cell_bold = ParagraphStyle(
         'CellBold', fontName='Helvetica-Bold', fontSize=7,
-        textColor=PDF_WHITE, leading=9,
+        textColor=PDF_BLACK, leading=9,
     )
     na_style = ParagraphStyle(
         'NA', fontName='Helvetica', fontSize=7,
@@ -466,7 +467,7 @@ def generate_pdf(rows, selected_columns, customer_name):
     header_row = [
         Paragraph(COLUMN_LABELS[k].upper(), ParagraphStyle(
             'Hdr', fontName='Helvetica-Bold', fontSize=6.5,
-            textColor=PDF_ACCENT, leading=8, letterSpacing=0.5,
+            textColor=PDF_WHITE, leading=8, letterSpacing=0.5,
         ))
         for k in selected_columns
     ]
@@ -516,7 +517,7 @@ def generate_pdf(rows, selected_columns, customer_name):
 
     # ── Footer note ───────────────────────────────────────────────────────────
     story.append(Spacer(1, 6 * mm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=PDF_BORDER,
+    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor('#c0cdd8'),
                              spaceAfter=4))
     story.append(Paragraph(
         f"Emerald IT Managed Solutions · Confidential · {len(rows)} devices · "
@@ -530,18 +531,19 @@ def generate_pdf(rows, selected_columns, customer_name):
 
 
 def _pdf_bg(canvas, doc):
-    """Draw dark background on every page."""
+    """White page with a thin blue accent bar at the top and page number."""
     canvas.saveState()
     W, H = doc.pagesize
-    canvas.setFillColor(PDF_DARK)
+    # White background (explicit, so it prints clean on any viewer)
+    canvas.setFillColor(colors.white)
     canvas.rect(0, 0, W, H, fill=1, stroke=0)
-    # Subtle accent line at very top
+    # Thin blue accent strip at very top
     canvas.setFillColor(PDF_ACCENT)
-    canvas.rect(0, H - 2, W, 2, fill=1, stroke=0)
-    # Page number
+    canvas.rect(0, H - 3, W, 3, fill=1, stroke=0)
+    # Page number bottom-right
     canvas.setFont('Helvetica', 7)
     canvas.setFillColor(PDF_MUTED)
-    canvas.drawRightString(W - 18 * mm, 12 * mm,
+    canvas.drawRightString(W - 18 * mm, 10 * mm,
                            f"Page {doc.page}")
     canvas.restoreState()
 
