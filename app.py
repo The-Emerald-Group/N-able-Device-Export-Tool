@@ -1,4 +1,5 @@
 import os
+import sys
 import requests
 import json
 import time
@@ -10,14 +11,68 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
+# ── ReportLab PDF ─────────────────────────────────────────────────────────────
+try:
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
+                                     Paragraph, Spacer, HRFlowable)
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+    REPORTLAB_OK = True
+except ImportError:
+    REPORTLAB_OK = False
+
 # --- CONFIGURATION ---
 BASE_URL = "https://ncod153.n-able.com"
 JWT = os.environ.get("NABLE_TOKEN")
 CACHE_FILE = "customers_cache.json"
-CACHE_TTL = 300  # 5 minutes
-ASSET_FETCH_DELAY = 0.15  # seconds between per-device calls
+CACHE_TTL = 300
+ASSET_FETCH_DELAY = 0.15
 
 cache_lock = threading.Lock()
+
+# ── All available columns, with display labels and grouping ──────────────────
+ALL_COLUMNS = [
+    # (key, label, group)
+    ("device_name",        "Device Name",         "Identity"),
+    ("device_class",       "Device Class",        "Identity"),
+    ("customer",           "Customer",            "Identity"),
+    ("site",               "Site",                "Identity"),
+    ("device_id",          "Device ID",           "Identity"),
+    ("ip_address",         "IP Address",          "Network"),
+    ("mac_address",        "MAC Address",         "Network"),
+    ("os",                 "OS",                  "Operating System"),
+    ("os_version",         "OS Version",          "Operating System"),
+    ("os_architecture",    "OS Architecture",     "Operating System"),
+    ("last_boot",          "Last Boot",           "Operating System"),
+    ("cpu",                "CPU",                 "Hardware"),
+    ("cpu_cores",          "CPU Cores",           "Hardware"),
+    ("cpu_speed",          "CPU Speed",           "Hardware"),
+    ("ram_total",          "RAM Total",           "Hardware"),
+    ("ram_detail",         "RAM Detail",          "Hardware"),
+    ("disk_total",         "Disk Total",          "Hardware"),
+    ("disk_model",         "Disk Model",          "Hardware"),
+    ("system_model",       "System Model",        "Hardware"),
+    ("serial_number",      "Serial Number",       "Hardware"),
+    ("motherboard",        "Motherboard",         "Hardware"),
+    ("bios_version",       "BIOS Version",        "Hardware"),
+    ("last_seen",          "Last Seen",           "Activity"),
+    ("last_user",          "Last Logged In User", "Activity"),
+]
+
+COLUMN_KEYS   = [c[0] for c in ALL_COLUMNS]
+COLUMN_LABELS = {c[0]: c[1] for c in ALL_COLUMNS}
+
+# Default column set
+DEFAULT_COLUMNS = [
+    "device_name", "device_class", "ip_address",
+    "os", "os_version", "os_architecture",
+    "cpu", "cpu_cores", "cpu_speed",
+    "ram_total", "disk_total",
+    "last_seen", "last_user",
+]
 
 
 def log(msg):
@@ -36,7 +91,7 @@ def get_access_token():
     return res.json()['tokens']['access']['token']
 
 
-# ── Device list ───────────────────────────────────────────────────────────────
+# ── Device fetching ───────────────────────────────────────────────────────────
 
 def fetch_all_devices(api_headers):
     devices = []
@@ -51,10 +106,7 @@ def fetch_all_devices(api_headers):
     return devices
 
 
-# ── Per-device endpoints ──────────────────────────────────────────────────────
-
 def fetch_device_detail(device_id, api_headers):
-    """GET /api/devices/{id} — returns basic device info."""
     try:
         res = requests.get(f"{BASE_URL}/api/devices/{device_id}",
                            headers=api_headers, timeout=15)
@@ -67,36 +119,6 @@ def fetch_device_detail(device_id, api_headers):
 
 
 def fetch_device_assets(device_id, api_headers):
-    """
-    GET /api/devices/{id}/assets
-
-    Real response shape (confirmed from debug output):
-    {
-      "_extra": {
-        "processor":    { name, numberofcores, maxclockspeed }
-        "memory":       { list: [{ capacity, type, speed, manufacturer, location }] }
-        "os":           { supportedos, licensetype, installdate, lastbootuptime }
-        "physicaldrive":{ list: [{ capacity, modelnumber, serialnumber }] }
-        "logicaldevice":{ list: [{ volumename, maxcapacity }] }
-        "computersystem":{ totalphysicalmemory, model, manufacturer, serialnumber }
-        "motherboard":  { product, manufacturer, biosversion }
-        "networkadapter": skipped — see top-level networkadapter
-        ...
-      },
-      "os": {
-        "reportedos", "osarchitecture", "version"
-      },
-      "computersystem": {
-        "totalphysicalmemory", "model", "manufacturer", "serialnumber", "netbiosname"
-      },
-      "networkadapter": {
-        "list": [{ ipaddress, macaddress, description, gateway, dnsserver }]
-      },
-      "processor": {
-        "name", "numberofcores", "numberofcpus"
-      }
-    }
-    """
     try:
         res = requests.get(f"{BASE_URL}/api/devices/{device_id}/assets",
                            headers=api_headers, timeout=20)
@@ -108,7 +130,7 @@ def fetch_device_assets(device_id, api_headers):
     return {}
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Field extractors ──────────────────────────────────────────────────────────
 
 def safe(val, fallback='N/A'):
     if val is None or val == '':
@@ -120,9 +142,7 @@ def safe(val, fallback='N/A'):
 def bytes_to_gb(val):
     try:
         v = float(val)
-        if v <= 0:
-            return 'N/A'
-        return f"{v / (1024 ** 3):.1f} GB"
+        return f"{v / (1024**3):.1f} GB" if v > 0 else 'N/A'
     except Exception:
         return safe(val)
 
@@ -130,173 +150,146 @@ def bytes_to_gb(val):
 def mhz_to_ghz(val):
     try:
         mhz = float(val)
-        if mhz <= 0:
-            return 'N/A'
-        return f"{mhz / 1000:.2f} GHz"
+        return f"{mhz / 1000:.2f} GHz" if mhz > 0 else 'N/A'
     except Exception:
         return safe(val)
 
 
-# ── Field extractors — mapped to the confirmed API structure ──────────────────
+def extract_all_fields(dev, detail, assets):
+    """Extract every possible field and return as a dict keyed by column key."""
+    base = {**dev, **detail}
+    extra = assets.get('_extra', {})
 
-def get_ip(assets):
-    """
-    assets.networkadapter.list[0].ipaddress
-    """
-    na = assets.get('networkadapter', {})
-    lst = na.get('list', []) if isinstance(na, dict) else []
-    for adapter in lst:
-        ip = adapter.get('ipaddress', '')
-        if ip:
-            return ip
-    return 'N/A'
+    # ── Network
+    na_list = assets.get('networkadapter', {}).get('list', []) if isinstance(assets.get('networkadapter'), dict) else []
+    ip  = safe(na_list[0].get('ipaddress')) if na_list else 'N/A'
+    mac = safe(na_list[0].get('macaddress')) if na_list else 'N/A'
 
-
-def get_os(assets, detail):
-    """
-    assets.os.reportedos / osarchitecture / version
-    Fallback: detail.supportedOs
-    """
+    # ── OS
     os_block = assets.get('os', {})
-    name    = safe(os_block.get('reportedos') or detail.get('supportedOs'))
-    version = safe(os_block.get('version'))
-    arch    = safe(os_block.get('osarchitecture'))
-    return name, version, arch
+    os_name  = safe(os_block.get('reportedos') or base.get('supportedOs'))
+    os_ver   = safe(os_block.get('version'))
+    os_arch  = safe(os_block.get('osarchitecture'))
 
-
-def get_cpu(assets):
-    """
-    assets.processor.name / numberofcores / numberofcpus
-    Fallback: assets._extra.processor.name / maxclockspeed
-    """
-    proc = assets.get('processor', {})
-    name   = safe(proc.get('name'))
-    cores  = safe(proc.get('numberofcores'))
-    # Top-level processor block doesn't have speed — check _extra
-    extra_proc = assets.get('_extra', {}).get('processor', {})
-    speed_raw  = extra_proc.get('maxclockspeed')
-    speed      = mhz_to_ghz(speed_raw) if speed_raw else 'N/A'
-    # If we got nothing from top-level, try _extra for name too
-    if name == 'N/A':
-        name = safe(extra_proc.get('description') or extra_proc.get('name'))
-    return name, cores, speed
-
-
-def get_ram(assets):
-    """
-    assets.computersystem.totalphysicalmemory (bytes)
-    Fallback: sum assets._extra.memory.list[].capacity (bytes)
-    """
-    cs = assets.get('computersystem', {})
-    raw = cs.get('totalphysicalmemory')
-    if raw:
-        return bytes_to_gb(raw)
-
-    # _extra.memory.list fallback
-    mem_list = assets.get('_extra', {}).get('memory', {}).get('list', [])
-    if mem_list:
+    # ── Last boot
+    os_extra  = extra.get('os', {})
+    raw_boot  = os_extra.get('lastbootuptime', '')
+    last_boot = 'N/A'
+    if raw_boot:
         try:
-            total = sum(float(m.get('capacity', 0)) for m in mem_list if m.get('capacity'))
-            if total > 0:
-                return bytes_to_gb(total)
+            last_boot = datetime.strptime(raw_boot[:19], "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y %H:%M")
         except Exception:
-            pass
-    return 'N/A'
+            last_boot = safe(raw_boot)
 
+    # ── CPU
+    proc       = assets.get('processor', {})
+    cpu_name   = safe(proc.get('name'))
+    cpu_cores  = safe(proc.get('numberofcores'))
+    extra_proc = extra.get('processor', {})
+    cpu_speed  = mhz_to_ghz(extra_proc.get('maxclockspeed')) if extra_proc.get('maxclockspeed') else 'N/A'
+    if cpu_name == 'N/A':
+        cpu_name = safe(extra_proc.get('description') or extra_proc.get('name'))
 
-def get_ram_details(assets):
-    """
-    Returns a human-readable string of RAM sticks, e.g. '2x DDR3 (Kingston 4.0 GB, 859B 2.0 GB)'
-    """
-    mem_list = assets.get('_extra', {}).get('memory', {}).get('list', [])
-    if not mem_list:
-        return 'N/A'
-    sticks = []
-    for m in mem_list:
-        cap = bytes_to_gb(m.get('capacity', 0))
-        mfr = safe(m.get('manufacturer', ''), '')
-        typ = safe(m.get('type', ''), '')
-        parts = [p for p in [mfr, cap, typ] if p]
-        sticks.append(' '.join(parts))
-    count = len(mem_list)
-    return f"{count}x — {', '.join(sticks)}"
+    # ── RAM
+    cs        = assets.get('computersystem', {})
+    ram_total = bytes_to_gb(cs.get('totalphysicalmemory')) if cs.get('totalphysicalmemory') else 'N/A'
+    if ram_total == 'N/A':
+        mem_list = extra.get('memory', {}).get('list', [])
+        if mem_list:
+            try:
+                total = sum(float(m.get('capacity', 0)) for m in mem_list if m.get('capacity'))
+                ram_total = bytes_to_gb(total) if total > 0 else 'N/A'
+            except Exception:
+                pass
 
+    mem_list   = extra.get('memory', {}).get('list', [])
+    ram_detail = 'N/A'
+    if mem_list:
+        sticks = []
+        for m in mem_list:
+            cap  = bytes_to_gb(m.get('capacity', 0))
+            mfr  = safe(m.get('manufacturer', ''), '')
+            typ  = safe(m.get('type', ''), '')
+            parts = [p for p in [mfr, cap, typ] if p]
+            sticks.append(' '.join(parts))
+        ram_detail = f"{len(mem_list)}x — {', '.join(sticks)}"
 
-def get_disk(assets):
-    """
-    Disk TOTAL from assets._extra.logicaldevice.list[].maxcapacity (bytes)
-    Sum all non-zero volumes to get total capacity.
-    Disk Free is not available from N-central assets API.
-    Physical drive info from _extra.physicaldrive.list[].
-    """
-    # Logical volumes — gives per-volume capacity
-    logical = assets.get('_extra', {}).get('logicaldevice', {}).get('list', [])
+    # ── Disk
+    logical     = extra.get('logicaldevice', {}).get('list', [])
+    disk_total  = 'N/A'
     total_bytes = 0
     for vol in logical:
-        cap = vol.get('maxcapacity', 0)
         try:
-            total_bytes += float(cap)
+            total_bytes += float(vol.get('maxcapacity', 0))
         except Exception:
             pass
     if total_bytes > 0:
-        return bytes_to_gb(total_bytes), 'N/A', 'N/A'
+        disk_total = bytes_to_gb(total_bytes)
+    else:
+        phys = extra.get('physicaldrive', {}).get('list', [])
+        phys_total = 0
+        for d in phys:
+            try:
+                phys_total += float(d.get('capacity', 0))
+            except Exception:
+                pass
+        if phys_total > 0:
+            disk_total = bytes_to_gb(phys_total)
 
-    # Physical drives fallback
-    phys = assets.get('_extra', {}).get('physicaldrive', {}).get('list', [])
-    phys_total = 0
-    for d in phys:
-        cap = d.get('capacity', 0)
+    phys_drives = extra.get('physicaldrive', {}).get('list', [])
+    disk_model  = safe(phys_drives[0].get('modelnumber')) if phys_drives else 'N/A'
+
+    # ── System
+    mfr         = safe(cs.get('manufacturer', ''), '')
+    mdl         = safe(cs.get('model', ''), '')
+    sys_parts   = [p for p in [mfr, mdl] if p and p.lower() not in ('n/a', '')]
+    system_model = ' '.join(sys_parts) if sys_parts else 'N/A'
+    serial      = safe(cs.get('serialnumber', ''), 'N/A')
+    if not serial or serial.lower() in ('n/a', 'to be filled by o.e.m.', ''):
+        serial = 'N/A'
+
+    mb      = extra.get('motherboard', {})
+    mobo    = safe(mb.get('product'))
+    bios    = f"BIOS {mb.get('biosversion')}" if mb.get('biosversion') else 'N/A'
+
+    # ── Activity
+    raw_ts    = base.get('lastApplianceCheckinTime') or base.get('lastCheckin')
+    last_seen = 'N/A'
+    if raw_ts:
         try:
-            phys_total += float(cap)
+            last_seen = datetime.strptime(raw_ts[:19], "%Y-%m-%dT%H:%M:%S").strftime("%d/%m/%Y %H:%M")
         except Exception:
-            pass
-    if phys_total > 0:
-        return bytes_to_gb(phys_total), 'N/A', 'N/A'
+            last_seen = safe(raw_ts)
 
-    return 'N/A', 'N/A', 'N/A'
+    dev_extra = extra.get('device', {})
+    last_user = safe(dev_extra.get('lastloggedinuser') or base.get('lastLoggedInUser'))
 
-
-def get_disk_model(assets):
-    """Returns physical drive model, e.g. 'CT240BX500SSD1 ATA Device'"""
-    drives = assets.get('_extra', {}).get('physicaldrive', {}).get('list', [])
-    if drives:
-        return safe(drives[0].get('modelnumber'))
-    return 'N/A'
-
-
-def get_motherboard(assets):
-    """assets._extra.motherboard.product"""
-    mb = assets.get('_extra', {}).get('motherboard', {})
-    product = safe(mb.get('product'))
-    mfr     = safe(mb.get('manufacturer', ''), '')
-    bios    = safe(mb.get('biosversion', ''), '')
-    if product == 'N/A':
-        return 'N/A', 'N/A'
-    desc = product
-    return desc, f"BIOS {bios}" if bios else 'N/A'
-
-
-def get_system_model(assets):
-    """assets.computersystem.manufacturer + model"""
-    cs  = assets.get('computersystem', {})
-    mfr = safe(cs.get('manufacturer', ''), '')
-    mdl = safe(cs.get('model', ''), '')
-    serial = safe(cs.get('serialnumber', ''), '')
-    parts = [p for p in [mfr, mdl] if p and p.lower() not in ('n/a', '')]
-    return ' '.join(parts) if parts else 'N/A', serial
-
-
-def get_last_boot(assets):
-    """assets._extra.os.lastbootuptime"""
-    os_extra = assets.get('_extra', {}).get('os', {})
-    raw = os_extra.get('lastbootuptime', '')
-    if raw:
-        try:
-            dt = datetime.strptime(raw[:19], "%Y-%m-%d %H:%M:%S")
-            return dt.strftime("%d/%m/%Y %H:%M")
-        except Exception:
-            return safe(raw)
-    return 'N/A'
+    return {
+        "device_name":     safe(base.get('longName') or base.get('name')),
+        "device_class":    safe(base.get('deviceClass')),
+        "customer":        safe(base.get('customerName')),
+        "site":            safe(base.get('siteName')),
+        "device_id":       safe(str(base.get('deviceId', ''))),
+        "ip_address":      ip,
+        "mac_address":     mac,
+        "os":              os_name,
+        "os_version":      os_ver,
+        "os_architecture": os_arch,
+        "last_boot":       last_boot,
+        "cpu":             cpu_name,
+        "cpu_cores":       cpu_cores,
+        "cpu_speed":       cpu_speed,
+        "ram_total":       ram_total,
+        "ram_detail":      ram_detail,
+        "disk_total":      disk_total,
+        "disk_model":      disk_model,
+        "system_model":    system_model,
+        "serial_number":   serial,
+        "motherboard":     mobo,
+        "bios_version":    bios,
+        "last_seen":       last_seen,
+        "last_user":       last_user,
+    }
 
 
 # ── Customer cache ────────────────────────────────────────────────────────────
@@ -327,38 +320,10 @@ def get_customers_list():
     return customers
 
 
-# ── CSV ───────────────────────────────────────────────────────────────────────
+# ── Data fetch ────────────────────────────────────────────────────────────────
 
-COLUMNS = [
-    'Device Name',
-    'Device Class',
-    'Customer',
-    'Site',
-    'IP Address',
-    'MAC Address',
-    'OS',
-    'OS Version',
-    'OS Architecture',
-    'Last Boot',
-    'CPU',
-    'CPU Cores',
-    'CPU Speed',
-    'RAM Total',
-    'RAM Detail',
-    'Disk Total',
-    'Disk Model',
-    'System Model',
-    'Serial Number',
-    'Motherboard',
-    'BIOS Version',
-    'Last Seen',
-    'Last Logged In User',
-    'Device ID',
-]
-
-
-def generate_csv_for_customer(customer_name):
-    log(f"Generating export for: {customer_name}")
+def fetch_customer_rows(customer_name):
+    """Fetch + extract all fields for every device of a customer."""
     token = get_access_token()
     h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
@@ -371,82 +336,214 @@ def generate_csv_for_customer(customer_name):
         dev_id = dev.get('deviceId')
         if not dev_id:
             continue
-
         if i > 0:
             time.sleep(ASSET_FETCH_DELAY)
-
         detail = fetch_device_detail(dev_id, h)
         assets = fetch_device_assets(dev_id, h)
+        rows.append(extract_all_fields(dev, detail, assets))
 
-        # Merge list item with detail (detail wins)
-        base = {**dev, **detail}
+    return rows
 
-        # ── Extract all fields ──
-        ip                           = get_ip(assets)
-        os_name, os_ver, os_arch     = get_os(assets, base)
-        cpu_name, cpu_cores, cpu_spd = get_cpu(assets)
-        ram_total                    = get_ram(assets)
-        ram_detail                   = get_ram_details(assets)
-        disk_total, _, _             = get_disk(assets)
-        disk_model                   = get_disk_model(assets)
-        system_model, serial         = get_system_model(assets)
-        motherboard, bios            = get_motherboard(assets)
-        last_boot                    = get_last_boot(assets)
-        last_seen                    = 'N/A'
-        last_user                    = 'N/A'
 
-        # MAC address
-        na_list = assets.get('networkadapter', {}).get('list', [])
-        mac = safe(na_list[0].get('macaddress')) if na_list else 'N/A'
+# ── CSV export ────────────────────────────────────────────────────────────────
 
-        # Last seen timestamp
-        raw_ts = base.get('lastApplianceCheckinTime') or base.get('lastCheckin')
-        if raw_ts:
-            try:
-                last_seen = datetime.strptime(raw_ts[:19], "%Y-%m-%dT%H:%M:%S").strftime("%d/%m/%Y %H:%M")
-            except Exception:
-                last_seen = safe(raw_ts)
+def generate_csv(rows, selected_columns):
+    headers = [COLUMN_LABELS[k] for k in selected_columns if k in COLUMN_LABELS]
+    output  = io.StringIO()
+    writer  = csv.writer(output)
+    writer.writerow(headers)
+    for row in rows:
+        writer.writerow([row.get(k, 'N/A') for k in selected_columns])
+    return output.getvalue().encode('utf-8-sig')
 
-        # Last logged-in user
-        device_extra = assets.get('_extra', {}).get('device', {})
-        last_user = safe(device_extra.get('lastloggedinuser')
-                         or base.get('lastLoggedInUser'))
 
-        rows.append({
-            'Device Name':         safe(base.get('longName') or base.get('name')),
-            'Device Class':        safe(base.get('deviceClass')),
-            'Customer':            safe(base.get('customerName')),
-            'Site':                safe(base.get('siteName')),
-            'IP Address':          ip,
-            'MAC Address':         mac,
-            'OS':                  os_name,
-            'OS Version':          os_ver,
-            'OS Architecture':     os_arch,
-            'Last Boot':           last_boot,
-            'CPU':                 cpu_name,
-            'CPU Cores':           cpu_cores,
-            'CPU Speed':           cpu_spd,
-            'RAM Total':           ram_total,
-            'RAM Detail':          ram_detail,
-            'Disk Total':          disk_total,
-            'Disk Model':          disk_model,
-            'System Model':        system_model,
-            'Serial Number':       serial,
-            'Motherboard':         motherboard,
-            'BIOS Version':        bios,
-            'Last Seen':           last_seen,
-            'Last Logged In User': last_user,
-            'Device ID':           safe(str(dev_id)),
-        })
+# ── PDF export ────────────────────────────────────────────────────────────────
+
+# Brand colours
+PDF_DARK   = colors.HexColor('#0a0e14')
+PDF_ACCENT = colors.HexColor('#00c8f0')
+PDF_MID    = colors.HexColor('#1a2535')
+PDF_LIGHT  = colors.HexColor('#e8f4f8')
+PDF_MUTED  = colors.HexColor('#7a9ab8')
+PDF_WHITE  = colors.white
+PDF_ROW_A  = colors.HexColor('#0f1822')
+PDF_ROW_B  = colors.HexColor('#141f2e')
+PDF_BORDER = colors.HexColor('#1e3040')
+
+# Columns that are short enough to fit nicely in a table
+SHORT_COLS = {
+    "device_class", "ip_address", "mac_address",
+    "os_version", "os_architecture", "cpu_cores", "cpu_speed",
+    "ram_total", "disk_total", "last_seen", "last_boot",
+    "last_user", "site", "device_id", "serial_number",
+    "bios_version", "system_model",
+}
+
+# For very wide tables, rotate to landscape
+LANDSCAPE_THRESHOLD = 7
+
+
+def generate_pdf(rows, selected_columns, customer_name):
+    if not REPORTLAB_OK:
+        raise Exception("ReportLab not installed — PDF generation unavailable.")
+
+    buf        = io.BytesIO()
+    use_land   = len(selected_columns) > LANDSCAPE_THRESHOLD
+    page_size  = landscape(A4) if use_land else A4
+    W, H       = page_size
+
+    margin = 18 * mm
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=page_size,
+        leftMargin=margin, rightMargin=margin,
+        topMargin=22 * mm, bottomMargin=18 * mm,
+    )
+
+    styles = getSampleStyleSheet()
+
+    # Custom paragraph styles
+    title_style = ParagraphStyle(
+        'Title', fontName='Helvetica-Bold', fontSize=18,
+        textColor=PDF_WHITE, spaceAfter=2,
+    )
+    sub_style = ParagraphStyle(
+        'Sub', fontName='Helvetica', fontSize=9,
+        textColor=PDF_MUTED, spaceAfter=0,
+    )
+    cell_style = ParagraphStyle(
+        'Cell', fontName='Helvetica', fontSize=7,
+        textColor=PDF_LIGHT, leading=9, wordWrap='LTR',
+    )
+    cell_bold = ParagraphStyle(
+        'CellBold', fontName='Helvetica-Bold', fontSize=7,
+        textColor=PDF_WHITE, leading=9,
+    )
+    na_style = ParagraphStyle(
+        'NA', fontName='Helvetica', fontSize=7,
+        textColor=PDF_MUTED, leading=9,
+    )
+
+    story = []
+
+    # ── Header block ──────────────────────────────────────────────────────────
+    story.append(Paragraph("EMERALD", ParagraphStyle(
+        'Brand', fontName='Helvetica-Bold', fontSize=8,
+        textColor=PDF_ACCENT, letterSpacing=4, spaceAfter=4,
+    )))
+    story.append(Paragraph(f"Device Inventory Report", title_style))
+    story.append(Paragraph(
+        f"Customer: <b>{customer_name}</b> &nbsp;·&nbsp; "
+        f"Generated: {datetime.now().strftime('%d %B %Y at %H:%M')} &nbsp;·&nbsp; "
+        f"{len(rows)} device{'s' if len(rows) != 1 else ''} &nbsp;·&nbsp; "
+        f"{len(selected_columns)} column{'s' if len(selected_columns) != 1 else ''}",
+        ParagraphStyle('Meta', fontName='Helvetica', fontSize=8,
+                       textColor=PDF_MUTED, spaceAfter=6)
+    ))
+    story.append(HRFlowable(width="100%", thickness=1, color=PDF_ACCENT,
+                             spaceAfter=10, spaceBefore=0))
 
     if not rows:
-        rows.append({k: 'No devices found' for k in COLUMNS})
+        story.append(Paragraph("No devices found for this customer.", cell_style))
+        doc.build(story, onFirstPage=_pdf_bg, onLaterPages=_pdf_bg)
+        return buf.getvalue()
 
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=COLUMNS)
-    writer.writeheader()
-    writer.writerows(rows)
-    return output.getvalue().encode('utf-8-sig')  # BOM → opens cleanly in Excel
+    # ── Calculate column widths ───────────────────────────────────────────────
+    usable_w = W - 2 * margin
+
+    # Base weights per column (wider for text-heavy columns)
+    weight_map = {
+        "device_name":     2.2, "cpu":          3.0, "ram_detail":    2.8,
+        "os":              2.0, "system_model": 2.0, "motherboard":   2.2,
+        "disk_model":      2.2, "last_user":    1.8, "device_class":  1.8,
+        "mac_address":     1.6, "serial_number":1.6, "bios_version":  1.4,
+    }
+    weights   = [weight_map.get(k, 1.2) for k in selected_columns]
+    total_w   = sum(weights)
+    col_widths = [usable_w * (w / total_w) for w in weights]
+
+    # ── Build table data ──────────────────────────────────────────────────────
+    header_row = [
+        Paragraph(COLUMN_LABELS[k].upper(), ParagraphStyle(
+            'Hdr', fontName='Helvetica-Bold', fontSize=6.5,
+            textColor=PDF_ACCENT, leading=8, letterSpacing=0.5,
+        ))
+        for k in selected_columns
+    ]
+    table_data = [header_row]
+
+    for row in rows:
+        table_row = []
+        for k in selected_columns:
+            val = row.get(k, 'N/A')
+            if val == 'N/A' or val == '' or val is None:
+                p = Paragraph('—', na_style)
+            elif k == 'device_name':
+                p = Paragraph(str(val), cell_bold)
+            else:
+                p = Paragraph(str(val), cell_style)
+            table_row.append(p)
+        table_data.append(table_row)
+
+    # ── Table styling ─────────────────────────────────────────────────────────
+    n_rows = len(table_data)
+    style_cmds = [
+        # Header
+        ('BACKGROUND',   (0, 0), (-1, 0),  PDF_MID),
+        ('LINEBELOW',    (0, 0), (-1, 0),  1.5, PDF_ACCENT),
+        # Alternating rows
+        *[('BACKGROUND', (0, i), (-1, i), PDF_ROW_A if i % 2 == 1 else PDF_ROW_B)
+          for i in range(1, n_rows)],
+        # Grid
+        ('LINEBELOW',    (0, 1), (-1, -1), 0.3, PDF_BORDER),
+        ('LINEBEFORE',   (0, 0), (0, -1),  0,   PDF_ACCENT),
+        # Padding
+        ('TOPPADDING',   (0, 0), (-1, 0),  5),
+        ('BOTTOMPADDING',(0, 0), (-1, 0),  5),
+        ('TOPPADDING',   (0, 1), (-1, -1), 4),
+        ('BOTTOMPADDING',(0, 1), (-1, -1), 4),
+        ('LEFTPADDING',  (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ('VALIGN',       (0, 0), (-1, -1), 'TOP'),
+        # Left accent bar on device name column
+        ('LINEAFTER',    (0, 0), (0, -1),  0.5, PDF_BORDER),
+    ]
+
+    tbl = Table(table_data, colWidths=col_widths, repeatRows=1,
+                hAlign='LEFT', splitByRow=True)
+    tbl.setStyle(TableStyle(style_cmds))
+    story.append(tbl)
+
+    # ── Footer note ───────────────────────────────────────────────────────────
+    story.append(Spacer(1, 6 * mm))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=PDF_BORDER,
+                             spaceAfter=4))
+    story.append(Paragraph(
+        f"Emerald IT Managed Solutions · Confidential · {len(rows)} devices · "
+        f"Data sourced from N-able RMM",
+        ParagraphStyle('Footer', fontName='Helvetica', fontSize=6.5,
+                       textColor=PDF_MUTED, alignment=TA_CENTER)
+    ))
+
+    doc.build(story, onFirstPage=_pdf_bg, onLaterPages=_pdf_bg)
+    return buf.getvalue()
+
+
+def _pdf_bg(canvas, doc):
+    """Draw dark background on every page."""
+    canvas.saveState()
+    W, H = doc.pagesize
+    canvas.setFillColor(PDF_DARK)
+    canvas.rect(0, 0, W, H, fill=1, stroke=0)
+    # Subtle accent line at very top
+    canvas.setFillColor(PDF_ACCENT)
+    canvas.rect(0, H - 2, W, 2, fill=1, stroke=0)
+    # Page number
+    canvas.setFont('Helvetica', 7)
+    canvas.setFillColor(PDF_MUTED)
+    canvas.drawRightString(W - 18 * mm, 12 * mm,
+                           f"Page {doc.page}")
+    canvas.restoreState()
 
 
 # ── HTTP server ───────────────────────────────────────────────────────────────
@@ -454,6 +551,12 @@ def generate_csv_for_customer(customer_name):
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
 
     def _cors(self):
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -467,6 +570,16 @@ class Handler(BaseHTTPRequestHandler):
         if path in ('/', '/index.html'):
             self._file('index.html', 'text/html')
 
+        elif path == '/api/columns':
+            # Return all available columns with labels and groups
+            self._json(200, {
+                'columns': [
+                    {'key': k, 'label': l, 'group': g}
+                    for k, l, g in ALL_COLUMNS
+                ],
+                'defaults': DEFAULT_COLUMNS,
+            })
+
         elif path == '/api/customers':
             try:
                 self._json(200, {'customers': get_customers_list()})
@@ -475,25 +588,53 @@ class Handler(BaseHTTPRequestHandler):
 
         elif path == '/api/export':
             customer = qs.get('customer', [None])[0]
+            fmt      = qs.get('format', ['csv'])[0].lower()
+            cols_raw = qs.get('columns', [','.join(DEFAULT_COLUMNS)])[0]
+            selected = [c.strip() for c in cols_raw.split(',') if c.strip() in COLUMN_KEYS]
+            if not selected:
+                selected = DEFAULT_COLUMNS
+
             if not customer:
                 self._json(400, {'error': 'Missing customer parameter'})
                 return
+
             try:
-                csv_bytes = generate_csv_for_customer(customer)
+                log(f"Generating {fmt.upper()} export for: {customer} ({len(selected)} columns)")
+                rows     = fetch_customer_rows(customer)
                 safe_name = customer.replace(' ', '_').replace('/', '-')
-                filename  = f"{safe_name}_devices_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/csv; charset=utf-8')
-                self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
-                self._cors()
-                self.end_headers()
-                self.wfile.write(csv_bytes)
-                log(f"Delivered: {customer} ({len(csv_bytes)} bytes)")
+                ts        = datetime.now().strftime('%Y%m%d_%H%M')
+
+                if fmt == 'pdf':
+                    pdf_bytes = generate_pdf(rows, selected, customer)
+                    filename  = f"{safe_name}_devices_{ts}.pdf"
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/pdf')
+                    self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+                    self._cors()
+                    self.end_headers()
+                    try:
+                        self.wfile.write(pdf_bytes)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    log(f"PDF delivered: {customer} ({len(pdf_bytes)} bytes)")
+                else:
+                    csv_bytes = generate_csv(rows, selected)
+                    filename  = f"{safe_name}_devices_{ts}.csv"
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/csv; charset=utf-8')
+                    self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+                    self._cors()
+                    self.end_headers()
+                    try:
+                        self.wfile.write(csv_bytes)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    log(f"CSV delivered: {customer} ({len(csv_bytes)} bytes)")
+
             except Exception as e:
                 log(f"Export error: {e}\n{traceback.format_exc()}")
                 self._json(500, {'error': str(e)})
 
-        # Debug: GET /api/debug?id=<deviceId>
         elif path == '/api/debug':
             device_id = qs.get('id', [None])[0]
             if not device_id:
@@ -512,13 +653,6 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
-
-    def handle_error(self, request, client_address):
-        import sys
-        exc = sys.exc_info()[1]
-        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
-            return
-        super().handle_error(request, client_address)
 
     def _file(self, filename, content_type):
         try:
@@ -552,4 +686,6 @@ if __name__ == "__main__":
     log("N-able Device Export Tool starting on port 8080...")
     if not JWT:
         log("!! WARNING: NABLE_TOKEN not set. API calls will fail.")
+    if not REPORTLAB_OK:
+        log("!! WARNING: ReportLab not installed — PDF export disabled.")
     HTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
