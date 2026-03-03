@@ -15,10 +15,7 @@ BASE_URL = "https://ncod153.n-able.com"
 JWT = os.environ.get("NABLE_TOKEN")
 CACHE_FILE = "customers_cache.json"
 CACHE_TTL = 300  # 5 minutes
-
-# N-central rate limit: max ~10 concurrent calls per endpoint.
-# We serialise asset fetches with a small delay to stay well clear.
-ASSET_FETCH_DELAY = 0.15  # seconds between per-device asset calls
+ASSET_FETCH_DELAY = 0.15  # seconds between per-device calls
 
 cache_lock = threading.Lock()
 
@@ -42,7 +39,6 @@ def get_access_token():
 # ── Device list ───────────────────────────────────────────────────────────────
 
 def fetch_all_devices(api_headers):
-    """Page through /api/devices and return every device object."""
     devices = []
     next_uri = f"{BASE_URL}/api/devices?pageSize=1000"
     while next_uri:
@@ -58,10 +54,7 @@ def fetch_all_devices(api_headers):
 # ── Per-device endpoints ──────────────────────────────────────────────────────
 
 def fetch_device_detail(device_id, api_headers):
-    """
-    GET /api/devices/{id}
-    Returns richer fields: uri (IP), siteName, supportedOs, isProbe, etc.
-    """
+    """GET /api/devices/{id} — returns basic device info."""
     try:
         res = requests.get(f"{BASE_URL}/api/devices/{device_id}",
                            headers=api_headers, timeout=15)
@@ -76,24 +69,46 @@ def fetch_device_detail(device_id, api_headers):
 def fetch_device_assets(device_id, api_headers):
     """
     GET /api/devices/{id}/assets
-    Returns hardware inventory: processors, memory, logicalDisks, OS block, etc.
-    Only available for devices with Asset Tracking enabled in N-central.
-    Returns an empty dict with a 404 for probes or devices without asset tracking.
+
+    Real response shape (confirmed from debug output):
+    {
+      "_extra": {
+        "processor":    { name, numberofcores, maxclockspeed }
+        "memory":       { list: [{ capacity, type, speed, manufacturer, location }] }
+        "os":           { supportedos, licensetype, installdate, lastbootuptime }
+        "physicaldrive":{ list: [{ capacity, modelnumber, serialnumber }] }
+        "logicaldevice":{ list: [{ volumename, maxcapacity }] }
+        "computersystem":{ totalphysicalmemory, model, manufacturer, serialnumber }
+        "motherboard":  { product, manufacturer, biosversion }
+        "networkadapter": skipped — see top-level networkadapter
+        ...
+      },
+      "os": {
+        "reportedos", "osarchitecture", "version"
+      },
+      "computersystem": {
+        "totalphysicalmemory", "model", "manufacturer", "serialnumber", "netbiosname"
+      },
+      "networkadapter": {
+        "list": [{ ipaddress, macaddress, description, gateway, dnsserver }]
+      },
+      "processor": {
+        "name", "numberofcores", "numberofcpus"
+      }
+    }
     """
     try:
         res = requests.get(f"{BASE_URL}/api/devices/{device_id}/assets",
                            headers=api_headers, timeout=20)
         if res.status_code == 200:
             body = res.json()
-            # Some N-central versions wrap in 'data', some return the object directly
             return body.get('data', body)
-        # 404 = no asset data for this device — normal for probes
     except Exception as e:
         log(f"  assets error {device_id}: {e}")
     return {}
 
 
-# ── Field extraction helpers ──────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def safe(val, fallback='N/A'):
     if val is None or val == '':
@@ -102,138 +117,186 @@ def safe(val, fallback='N/A'):
     return s if s else fallback
 
 
-def smart_gb(val):
-    """Convert a raw number (bytes, MB, or GB) to a '12.3 GB' string."""
+def bytes_to_gb(val):
     try:
         v = float(val)
         if v <= 0:
             return 'N/A'
-        if v > 10_000_000:          # Looks like bytes (>10 MB expressed as bytes)
-            return f"{v / (1024**3):.1f} GB"
-        elif v > 500:               # Looks like MB
-            return f"{v / 1024:.1f} GB"
-        else:                       # Already in GB or very small device
-            return f"{v:.1f} GB"
+        return f"{v / (1024 ** 3):.1f} GB"
     except Exception:
         return safe(val)
 
 
-def _format_mhz(speed):
-    if speed is None:
-        return 'N/A'
+def mhz_to_ghz(val):
     try:
-        mhz = float(speed)
-        if mhz > 100:
-            return f"{mhz/1000:.2f} GHz"
-        return f"{mhz:.2f} GHz"
+        mhz = float(val)
+        if mhz <= 0:
+            return 'N/A'
+        return f"{mhz / 1000:.2f} GHz"
     except Exception:
-        return safe(speed)
+        return safe(val)
 
 
-def extract_cpu(assets):
+# ── Field extractors — mapped to the confirmed API structure ──────────────────
+
+def get_ip(assets):
     """
-    Try the known shapes of the /assets response for processor data.
-    Returns (name, cores, speed_str).
+    assets.networkadapter.list[0].ipaddress
     """
-    # Shape A: assets.processors = [{ name, numberOfCores, maxClockSpeed }]
-    procs = (assets.get('processors') or assets.get('processor') or [])
-    if isinstance(procs, list) and procs:
-        p = procs[0]
-        name  = safe(p.get('name') or p.get('description') or p.get('caption'))
-        cores = safe(p.get('numberOfCores') or p.get('coreCount'))
-        speed = p.get('maxClockSpeed') or p.get('currentClockSpeed') or p.get('speed')
-        return name, cores, _format_mhz(speed)
-
-    # Shape B: flat keys inside assets dict
-    name  = safe(assets.get('processorType') or assets.get('cpuName'))
-    cores = safe(assets.get('numberOfCores') or assets.get('processorCores'))
-    speed = assets.get('processorSpeed') or assets.get('cpuSpeed') or assets.get('maxClockSpeed')
-    return name, cores, _format_mhz(speed)
+    na = assets.get('networkadapter', {})
+    lst = na.get('list', []) if isinstance(na, dict) else []
+    for adapter in lst:
+        ip = adapter.get('ipaddress', '')
+        if ip:
+            return ip
+    return 'N/A'
 
 
-def extract_ram(assets):
-    """Return total RAM as a human-readable GB string."""
-    # Shape A: assets.memory = { totalPhysicalMemory: <bytes> }
-    mem = assets.get('memory') or {}
-    if isinstance(mem, dict):
-        raw = (mem.get('totalPhysicalMemory') or mem.get('totalMemory')
-               or mem.get('capacity') or mem.get('totalVisibleMemorySize'))
-        if raw:
-            return smart_gb(raw)
+def get_os(assets, detail):
+    """
+    assets.os.reportedos / osarchitecture / version
+    Fallback: detail.supportedOs
+    """
+    os_block = assets.get('os', {})
+    name    = safe(os_block.get('reportedos') or detail.get('supportedOs'))
+    version = safe(os_block.get('version'))
+    arch    = safe(os_block.get('osarchitecture'))
+    return name, version, arch
 
-    # Shape B: assets.memoryModules = [{ capacity: <bytes> }] — sum them
-    modules = assets.get('memoryModules') or assets.get('memoryModule') or []
-    if isinstance(modules, list) and modules:
+
+def get_cpu(assets):
+    """
+    assets.processor.name / numberofcores / numberofcpus
+    Fallback: assets._extra.processor.name / maxclockspeed
+    """
+    proc = assets.get('processor', {})
+    name   = safe(proc.get('name'))
+    cores  = safe(proc.get('numberofcores'))
+    # Top-level processor block doesn't have speed — check _extra
+    extra_proc = assets.get('_extra', {}).get('processor', {})
+    speed_raw  = extra_proc.get('maxclockspeed')
+    speed      = mhz_to_ghz(speed_raw) if speed_raw else 'N/A'
+    # If we got nothing from top-level, try _extra for name too
+    if name == 'N/A':
+        name = safe(extra_proc.get('description') or extra_proc.get('name'))
+    return name, cores, speed
+
+
+def get_ram(assets):
+    """
+    assets.computersystem.totalphysicalmemory (bytes)
+    Fallback: sum assets._extra.memory.list[].capacity (bytes)
+    """
+    cs = assets.get('computersystem', {})
+    raw = cs.get('totalphysicalmemory')
+    if raw:
+        return bytes_to_gb(raw)
+
+    # _extra.memory.list fallback
+    mem_list = assets.get('_extra', {}).get('memory', {}).get('list', [])
+    if mem_list:
         try:
-            total = sum(float(m.get('capacity', 0)) for m in modules if m.get('capacity'))
+            total = sum(float(m.get('capacity', 0)) for m in mem_list if m.get('capacity'))
             if total > 0:
-                return smart_gb(total)
+                return bytes_to_gb(total)
         except Exception:
             pass
-
-    # Shape C: flat top-level keys
-    raw = (assets.get('totalPhysicalMemory') or assets.get('totalMemory')
-           or assets.get('physicalMemory') or assets.get('ramTotal')
-           or assets.get('totalVisibleMemorySize'))
-    return smart_gb(raw) if raw else 'N/A'
+    return 'N/A'
 
 
-def extract_disks(assets):
-    """Return (total, used, free) as GB strings, summed across all volumes."""
-    # Shape A: assets.logicalDisks = [{ size, freeSpace }]
-    logical = assets.get('logicalDisks') or assets.get('logicalDisk') or []
-    if isinstance(logical, list) and logical:
+def get_ram_details(assets):
+    """
+    Returns a human-readable string of RAM sticks, e.g. '2x DDR3 (Kingston 4.0 GB, 859B 2.0 GB)'
+    """
+    mem_list = assets.get('_extra', {}).get('memory', {}).get('list', [])
+    if not mem_list:
+        return 'N/A'
+    sticks = []
+    for m in mem_list:
+        cap = bytes_to_gb(m.get('capacity', 0))
+        mfr = safe(m.get('manufacturer', ''), '')
+        typ = safe(m.get('type', ''), '')
+        parts = [p for p in [mfr, cap, typ] if p]
+        sticks.append(' '.join(parts))
+    count = len(mem_list)
+    return f"{count}x — {', '.join(sticks)}"
+
+
+def get_disk(assets):
+    """
+    Disk TOTAL from assets._extra.logicaldevice.list[].maxcapacity (bytes)
+    Sum all non-zero volumes to get total capacity.
+    Disk Free is not available from N-central assets API.
+    Physical drive info from _extra.physicaldrive.list[].
+    """
+    # Logical volumes — gives per-volume capacity
+    logical = assets.get('_extra', {}).get('logicaldevice', {}).get('list', [])
+    total_bytes = 0
+    for vol in logical:
+        cap = vol.get('maxcapacity', 0)
         try:
-            total = sum(float(d.get('size', 0)) for d in logical if d.get('size'))
-            free  = sum(float(d.get('freeSpace', 0) or d.get('freeSize', 0)) for d in logical)
-            used  = total - free
-            if total > 0:
-                return smart_gb(total), smart_gb(used), smart_gb(free)
+            total_bytes += float(cap)
         except Exception:
             pass
+    if total_bytes > 0:
+        return bytes_to_gb(total_bytes), 'N/A', 'N/A'
 
-    # Shape B: assets.diskDrives = [{ size }] (physical drives — no free space info)
-    drives = assets.get('diskDrives') or assets.get('diskDrive') or []
-    if isinstance(drives, list) and drives:
+    # Physical drives fallback
+    phys = assets.get('_extra', {}).get('physicaldrive', {}).get('list', [])
+    phys_total = 0
+    for d in phys:
+        cap = d.get('capacity', 0)
         try:
-            total = sum(float(d.get('size', 0)) for d in drives if d.get('size'))
-            if total > 0:
-                return smart_gb(total), 'N/A', 'N/A'
+            phys_total += float(cap)
         except Exception:
             pass
-
-    # Shape C: flat fields
-    total_raw = assets.get('totalDiskSpace') or assets.get('diskTotal') or assets.get('hddTotal')
-    free_raw  = assets.get('freeDiskSpace')  or assets.get('diskFree')  or assets.get('hddFree')
-    if total_raw:
-        total_s = smart_gb(total_raw)
-        free_s  = smart_gb(free_raw) if free_raw else 'N/A'
-        used_s  = 'N/A'
-        if free_raw:
-            try:
-                used_s = smart_gb(float(total_raw) - float(free_raw))
-            except Exception:
-                pass
-        return total_s, used_s, free_s
+    if phys_total > 0:
+        return bytes_to_gb(phys_total), 'N/A', 'N/A'
 
     return 'N/A', 'N/A', 'N/A'
 
 
-def extract_os(detail, assets):
-    """Pull OS name, version, architecture — prefer assets over detail."""
-    os_block = assets.get('operatingSystem') or assets.get('os') or {}
-    if isinstance(os_block, dict) and os_block:
-        os_name    = safe(os_block.get('name') or os_block.get('caption'))
-        os_version = safe(os_block.get('version') or os_block.get('buildNumber')
-                          or os_block.get('osVersion'))
-        os_arch    = safe(os_block.get('osArchitecture') or os_block.get('architecture'))
-    else:
-        os_name    = safe(detail.get('supportedOs') or detail.get('operatingSystem')
-                          or assets.get('osName'))
-        os_version = safe(detail.get('osVersion') or assets.get('osVersion'))
-        os_arch    = safe(detail.get('osArchitecture') or assets.get('osArchitecture'))
+def get_disk_model(assets):
+    """Returns physical drive model, e.g. 'CT240BX500SSD1 ATA Device'"""
+    drives = assets.get('_extra', {}).get('physicaldrive', {}).get('list', [])
+    if drives:
+        return safe(drives[0].get('modelnumber'))
+    return 'N/A'
 
-    return os_name, os_version, os_arch
+
+def get_motherboard(assets):
+    """assets._extra.motherboard.product"""
+    mb = assets.get('_extra', {}).get('motherboard', {})
+    product = safe(mb.get('product'))
+    mfr     = safe(mb.get('manufacturer', ''), '')
+    bios    = safe(mb.get('biosversion', ''), '')
+    if product == 'N/A':
+        return 'N/A', 'N/A'
+    desc = product
+    return desc, f"BIOS {bios}" if bios else 'N/A'
+
+
+def get_system_model(assets):
+    """assets.computersystem.manufacturer + model"""
+    cs  = assets.get('computersystem', {})
+    mfr = safe(cs.get('manufacturer', ''), '')
+    mdl = safe(cs.get('model', ''), '')
+    serial = safe(cs.get('serialnumber', ''), '')
+    parts = [p for p in [mfr, mdl] if p and p.lower() not in ('n/a', '')]
+    return ' '.join(parts) if parts else 'N/A', serial
+
+
+def get_last_boot(assets):
+    """assets._extra.os.lastbootuptime"""
+    os_extra = assets.get('_extra', {}).get('os', {})
+    raw = os_extra.get('lastbootuptime', '')
+    if raw:
+        try:
+            dt = datetime.strptime(raw[:19], "%Y-%m-%d %H:%M:%S")
+            return dt.strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            return safe(raw)
+    return 'N/A'
 
 
 # ── Customer cache ────────────────────────────────────────────────────────────
@@ -264,15 +327,33 @@ def get_customers_list():
     return customers
 
 
-# ── CSV generation ────────────────────────────────────────────────────────────
+# ── CSV ───────────────────────────────────────────────────────────────────────
 
 COLUMNS = [
-    'Device Name', 'Device Class', 'Customer', 'Site', 'IP Address',
-    'OS', 'OS Version', 'OS Architecture',
-    'CPU', 'CPU Cores', 'CPU Speed',
+    'Device Name',
+    'Device Class',
+    'Customer',
+    'Site',
+    'IP Address',
+    'MAC Address',
+    'OS',
+    'OS Version',
+    'OS Architecture',
+    'Last Boot',
+    'CPU',
+    'CPU Cores',
+    'CPU Speed',
     'RAM Total',
-    'Disk Total', 'Disk Used', 'Disk Free',
-    'Last Seen', 'Device ID',
+    'RAM Detail',
+    'Disk Total',
+    'Disk Model',
+    'System Model',
+    'Serial Number',
+    'Motherboard',
+    'BIOS Version',
+    'Last Seen',
+    'Last Logged In User',
+    'Device ID',
 ]
 
 
@@ -291,50 +372,71 @@ def generate_csv_for_customer(customer_name):
         if not dev_id:
             continue
 
-        # Rate-limit courtesy pause
         if i > 0:
             time.sleep(ASSET_FETCH_DELAY)
 
         detail = fetch_device_detail(dev_id, h)
         assets = fetch_device_assets(dev_id, h)
 
-        # Merge: list item → detail (detail wins on key conflicts)
+        # Merge list item with detail (detail wins)
         base = {**dev, **detail}
 
-        ip                             = safe(base.get('uri') or base.get('ipAddress'))
-        os_name, os_ver, os_arch       = extract_os(base, assets)
-        cpu_name, cpu_cores, cpu_speed = extract_cpu(assets)
-        if cpu_name == 'N/A':          # fallback if assets returned nothing
-            cpu_name = safe(base.get('processorType') or base.get('cpuName'))
-        ram                            = extract_ram(assets)
-        disk_total, disk_used, disk_free = extract_disks(assets)
+        # ── Extract all fields ──
+        ip                           = get_ip(assets)
+        os_name, os_ver, os_arch     = get_os(assets, base)
+        cpu_name, cpu_cores, cpu_spd = get_cpu(assets)
+        ram_total                    = get_ram(assets)
+        ram_detail                   = get_ram_details(assets)
+        disk_total, _, _             = get_disk(assets)
+        disk_model                   = get_disk_model(assets)
+        system_model, serial         = get_system_model(assets)
+        motherboard, bios            = get_motherboard(assets)
+        last_boot                    = get_last_boot(assets)
+        last_seen                    = 'N/A'
+        last_user                    = 'N/A'
 
+        # MAC address
+        na_list = assets.get('networkadapter', {}).get('list', [])
+        mac = safe(na_list[0].get('macaddress')) if na_list else 'N/A'
+
+        # Last seen timestamp
         raw_ts = base.get('lastApplianceCheckinTime') or base.get('lastCheckin')
-        last_seen = 'N/A'
         if raw_ts:
             try:
                 last_seen = datetime.strptime(raw_ts[:19], "%Y-%m-%dT%H:%M:%S").strftime("%d/%m/%Y %H:%M")
             except Exception:
                 last_seen = safe(raw_ts)
 
+        # Last logged-in user
+        device_extra = assets.get('_extra', {}).get('device', {})
+        last_user = safe(device_extra.get('lastloggedinuser')
+                         or base.get('lastLoggedInUser'))
+
         rows.append({
-            'Device Name':     safe(base.get('longName') or base.get('name')),
-            'Device Class':    safe(base.get('deviceClass')),
-            'Customer':        safe(base.get('customerName')),
-            'Site':            safe(base.get('siteName')),
-            'IP Address':      ip,
-            'OS':              os_name,
-            'OS Version':      os_ver,
-            'OS Architecture': os_arch,
-            'CPU':             cpu_name,
-            'CPU Cores':       cpu_cores,
-            'CPU Speed':       cpu_speed,
-            'RAM Total':       ram,
-            'Disk Total':      disk_total,
-            'Disk Used':       disk_used,
-            'Disk Free':       disk_free,
-            'Last Seen':       last_seen,
-            'Device ID':       safe(str(dev_id)),
+            'Device Name':         safe(base.get('longName') or base.get('name')),
+            'Device Class':        safe(base.get('deviceClass')),
+            'Customer':            safe(base.get('customerName')),
+            'Site':                safe(base.get('siteName')),
+            'IP Address':          ip,
+            'MAC Address':         mac,
+            'OS':                  os_name,
+            'OS Version':          os_ver,
+            'OS Architecture':     os_arch,
+            'Last Boot':           last_boot,
+            'CPU':                 cpu_name,
+            'CPU Cores':           cpu_cores,
+            'CPU Speed':           cpu_spd,
+            'RAM Total':           ram_total,
+            'RAM Detail':          ram_detail,
+            'Disk Total':          disk_total,
+            'Disk Model':          disk_model,
+            'System Model':        system_model,
+            'Serial Number':       serial,
+            'Motherboard':         motherboard,
+            'BIOS Version':        bios,
+            'Last Seen':           last_seen,
+            'Last Logged In User': last_user,
+            'Device ID':           safe(str(dev_id)),
         })
 
     if not rows:
@@ -351,7 +453,7 @@ def generate_csv_for_customer(customer_name):
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        pass  # Suppress default request logs
+        pass
 
     def _cors(self):
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -391,8 +493,7 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"Export error: {e}\n{traceback.format_exc()}")
                 self._json(500, {'error': str(e)})
 
-        # Debug endpoint: GET /api/debug?id=<deviceId>
-        # Returns the raw detail + assets JSON so you can see exactly what N-able sends.
+        # Debug: GET /api/debug?id=<deviceId>
         elif path == '/api/debug':
             device_id = qs.get('id', [None])[0]
             if not device_id:
