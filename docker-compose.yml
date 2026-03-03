@@ -1,0 +1,16 @@
+services:
+  nable-export:
+    image: samuelstreets/nable-device-export:latest
+    container_name: nable-export
+    ports:
+      - "8081:8080"
+    environment:
+      - NABLE_TOKEN=#Paste Your N-able JWT Token Here#
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: always
