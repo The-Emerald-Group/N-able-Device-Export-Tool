@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>N-able Device Export</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #080c10;
+            --surface: #0d1318;
+            --surface2: #111820;
+            --border: #1a2535;
+            --border2: #243040;
+            --accent: #00d4ff;
+            --accent2: #0099cc;
+            --accent-dim: rgba(0, 212, 255, 0.08);
+            --accent-glow: rgba(0, 212, 255, 0.15);
+            --text: #e8f0f8;
+            --text2: #7a9ab8;
+            --text3: #3d5a70;
+            --green: #00e5a0;
+            --red: #ff4560;
+            --yellow: #ffc72c;
+            --mono: 'DM Mono', monospace;
+            --sans: 'DM Sans', sans-serif;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--sans);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Atmospheric background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -200px; left: 50%;
+            transform: translateX(-50%);
+            width: 800px; height: 500px;
+            background: radial-gradient(ellipse, rgba(0, 150, 200, 0.06) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Grid lines overlay */
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(0, 212, 255, 0.015) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 212, 255, 0.015) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .wrap {
+            position: relative;
+            z-index: 1;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 48px 32px 80px;
+        }
+
+        /* ── Header ── */
+        header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            margin-bottom: 56px;
+        }
+
+        .logo-area {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .logo-eyebrow {
+            font-family: var(--mono);
+            font-size: 0.65rem;
+            letter-spacing: 0.2em;
+            color: var(--accent);
+            text-transform: uppercase;
+        }
+
+        h1 {
+            font-size: 1.9rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            color: var(--text);
+            line-height: 1.1;
+        }
+
+        h1 span {
+            color: var(--accent);
+        }
+
+        .header-meta {
+            font-family: var(--mono);
+            font-size: 0.7rem;
+            color: var(--text3);
+            text-align: right;
+            line-height: 1.8;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: var(--green);
+            margin-right: 5px;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* ── Divider ── */
+        .divider {
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--border2) 20%, var(--border2) 80%, transparent);
+            margin-bottom: 40px;
+        }
+
+        /* ── Search Panel ── */
+        .panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 32px;
+            margin-bottom: 24px;
+        }
+
+        .panel-label {
+            font-family: var(--mono);
+            font-size: 0.65rem;
+            letter-spacing: 0.18em;
+            color: var(--text3);
+            text-transform: uppercase;
+            margin-bottom: 16px;
+        }
+
+        .search-row {
+            display: flex;
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        .search-container {
+            flex: 1;
+            position: relative;
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text3);
+            font-size: 0.9rem;
+            pointer-events: none;
+        }
+
+        #customer-search {
+            width: 100%;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: 8px;
+            padding: 12px 14px 12px 38px;
+            color: var(--text);
+            font-family: var(--sans);
+            font-size: 0.95rem;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        #customer-search:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        #customer-search::placeholder { color: var(--text3); }
+
+        /* ── Customer List ── */
+        #customer-list {
+            max-height: 380px;
+            overflow-y: auto;
+            margin-top: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border2) transparent;
+        }
+
+        .customer-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 11px 16px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-size: 0.9rem;
+            gap: 12px;
+        }
+
+        .customer-item:hover {
+            border-color: var(--accent);
+            background: var(--accent-dim);
+            transform: translateX(2px);
+        }
+
+        .customer-item.selected {
+            border-color: var(--accent);
+            background: var(--accent-dim);
+        }
+
+        .customer-name {
+            flex: 1;
+            font-weight: 500;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .customer-check {
+            color: var(--accent);
+            font-size: 0.85rem;
+            opacity: 0;
+            transition: opacity 0.15s;
+            flex-shrink: 0;
+        }
+
+        .customer-item.selected .customer-check { opacity: 1; }
+
+        /* ── Export Panel ── */
+        .export-panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 28px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 24px;
+            transition: all 0.3s;
+        }
+
+        .export-panel.active {
+            border-color: var(--accent);
+            background: linear-gradient(135deg, var(--surface) 0%, rgba(0, 212, 255, 0.04) 100%);
+        }
+
+        .export-info {
+            flex: 1;
+        }
+
+        .export-label {
+            font-family: var(--mono);
+            font-size: 0.65rem;
+            letter-spacing: 0.18em;
+            color: var(--text3);
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+
+        .export-customer-name {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .export-customer-name.placeholder {
+            color: var(--text3);
+            font-weight: 400;
+            font-style: italic;
+        }
+
+        .export-subtext {
+            font-size: 0.8rem;
+            color: var(--text2);
+            margin-top: 4px;
+            font-family: var(--mono);
+        }
+
+        .export-btn {
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            border-radius: 8px;
+            padding: 12px 28px;
+            font-family: var(--sans);
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            letter-spacing: -0.01em;
+        }
+
+        .export-btn:hover:not(:disabled) {
+            background: #33ddff;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 20px rgba(0, 212, 255, 0.35);
+        }
+
+        .export-btn:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .export-btn:disabled {
+            background: var(--border2);
+            color: var(--text3);
+            cursor: not-allowed;
+        }
+
+        .export-btn.loading {
+            background: var(--accent2);
+        }
+
+        /* ── Columns Info ── */
+        .columns-info {
+            margin-top: 24px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px 32px;
+        }
+
+        .columns-title {
+            font-family: var(--mono);
+            font-size: 0.65rem;
+            letter-spacing: 0.18em;
+            color: var(--text3);
+            text-transform: uppercase;
+            margin-bottom: 14px;
+        }
+
+        .columns-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 8px;
+        }
+
+        .col-badge {
+            font-family: var(--mono);
+            font-size: 0.72rem;
+            color: var(--text2);
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            padding: 5px 10px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* ── Toast ── */
+        .toast {
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: 10px;
+            padding: 14px 20px;
+            font-size: 0.85rem;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transform: translateY(80px);
+            opacity: 0;
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            z-index: 100;
+            max-width: 360px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .toast.success { border-color: var(--green); }
+        .toast.error { border-color: var(--red); }
+        .toast.info { border-color: var(--accent); }
+
+        .toast-icon { font-size: 1rem; flex-shrink: 0; }
+
+        /* ── Loading skeleton ── */
+        .skeleton {
+            background: linear-gradient(90deg, var(--surface2) 25%, var(--border) 50%, var(--surface2) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.4s infinite;
+            border-radius: 6px;
+            height: 38px;
+        }
+
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* ── Spinner ── */
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .spinner {
+            width: 14px; height: 14px;
+            border: 2px solid rgba(0,0,0,0.3);
+            border-top-color: var(--bg);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+
+        /* ── Empty state ── */
+        .empty-state {
+            padding: 32px;
+            text-align: center;
+            color: var(--text3);
+            font-size: 0.85rem;
+            font-family: var(--mono);
+        }
+
+        /* ── Count badge ── */
+        .count-badge {
+            font-family: var(--mono);
+            font-size: 0.7rem;
+            color: var(--accent);
+            background: var(--accent-dim);
+            border: 1px solid rgba(0, 212, 255, 0.2);
+            border-radius: 4px;
+            padding: 2px 8px;
+            white-space: nowrap;
+        }
+
+        .list-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        /* ── Error state ── */
+        .error-state {
+            padding: 24px;
+            background: rgba(255, 69, 96, 0.06);
+            border: 1px solid rgba(255, 69, 96, 0.2);
+            border-radius: 8px;
+            color: var(--red);
+            font-size: 0.85rem;
+            font-family: var(--mono);
+            text-align: center;
+        }
+
+        @media (max-width: 600px) {
+            .wrap { padding: 28px 16px 60px; }
+            header { flex-direction: column; gap: 16px; }
+            .search-row { flex-direction: column; }
+            .export-panel { flex-direction: column; }
+            .export-btn { width: 100%; justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+
+    <header>
+        <div class="logo-area">
+            <div class="logo-eyebrow">N-able RMM</div>
+            <h1>Device <span>Export</span></h1>
+        </div>
+        <div class="header-meta">
+            <div><span class="status-dot"></span>Connected</div>
+            <div id="last-updated">Loading customers...</div>
+        </div>
+    </header>
+
+    <div class="divider"></div>
+
+    <!-- Customer Select Panel -->
+    <div class="panel">
+        <div class="panel-label">Select Customer</div>
+        <div class="search-container">
+            <span class="search-icon">⌕</span>
+            <input
+                type="text"
+                id="customer-search"
+                placeholder="Search customers..."
+                autocomplete="off"
+                disabled
+            >
+        </div>
+        <div class="list-header" style="margin-top:16px;">
+            <span class="panel-label" style="margin-bottom:0;">Results</span>
+            <span id="count-badge" class="count-badge" style="display:none;"></span>
+        </div>
+        <div id="customer-list">
+            <div class="skeleton"></div>
+            <div class="skeleton" style="opacity:.7;"></div>
+            <div class="skeleton" style="opacity:.5;"></div>
+            <div class="skeleton" style="opacity:.3;"></div>
+        </div>
+    </div>
+
+    <!-- Export Panel -->
+    <div class="export-panel" id="export-panel">
+        <div class="export-info">
+            <div class="export-label">Export Target</div>
+            <div class="export-customer-name placeholder" id="export-name">No customer selected</div>
+            <div class="export-subtext" id="export-sub">CSV includes hardware specs, OS, disk, RAM &amp; more</div>
+        </div>
+        <button class="export-btn" id="export-btn" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download CSV
+        </button>
+    </div>
+
+    <!-- Column info -->
+    <div class="columns-info">
+        <div class="columns-title">Exported Columns</div>
+        <div class="columns-grid">
+            <div class="col-badge">Device Name</div>
+            <div class="col-badge">Device Class</div>
+            <div class="col-badge">Customer</div>
+            <div class="col-badge">Site</div>
+            <div class="col-badge">IP Address</div>
+            <div class="col-badge">OS</div>
+            <div class="col-badge">OS Version</div>
+            <div class="col-badge">OS Architecture</div>
+            <div class="col-badge">CPU</div>
+            <div class="col-badge">CPU Cores</div>
+            <div class="col-badge">CPU Speed</div>
+            <div class="col-badge">RAM Total</div>
+            <div class="col-badge">Disk Total</div>
+            <div class="col-badge">Disk Used</div>
+            <div class="col-badge">Disk Free</div>
+            <div class="col-badge">Last Seen</div>
+            <div class="col-badge">Device ID</div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast">
+    <span class="toast-icon" id="toast-icon"></span>
+    <span id="toast-msg"></span>
+</div>
+
+<script>
+    let allCustomers = [];
+    let selectedCustomer = null;
+
+    // ── Toast ──
+    function showToast(msg, type = 'info', icon = 'ℹ️') {
+        const t = document.getElementById('toast');
+        document.getElementById('toast-msg').textContent = msg;
+        document.getElementById('toast-icon').textContent = icon;
+        t.className = `toast ${type} show`;
+        setTimeout(() => t.classList.remove('show'), 3500);
+    }
+
+    // ── Load customers ──
+    async function loadCustomers() {
+        try {
+            const res = await fetch('/api/customers');
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            allCustomers = data.customers || [];
+            document.getElementById('last-updated').textContent = `${allCustomers.length} customers loaded`;
+            document.getElementById('customer-search').disabled = false;
+            renderList(allCustomers);
+        } catch (e) {
+            document.getElementById('customer-list').innerHTML =
+                `<div class="error-state">⚠ Failed to load customers<br><span style="font-size:.75rem;opacity:.6;">${e.message}</span></div>`;
+            document.getElementById('last-updated').textContent = 'Connection error';
+            showToast('Could not connect to N-able API', 'error', '⚠️');
+        }
+    }
+
+    // ── Render customer list ──
+    function renderList(customers) {
+        const list = document.getElementById('customer-list');
+        const badge = document.getElementById('count-badge');
+
+        if (customers.length === 0) {
+            list.innerHTML = '<div class="empty-state">No customers match your search</div>';
+            badge.style.display = 'none';
+            return;
+        }
+
+        badge.textContent = `${customers.length} of ${allCustomers.length}`;
+        badge.style.display = customers.length < allCustomers.length ? 'inline' : 'none';
+
+        list.innerHTML = customers.map(c => `
+            <div class="customer-item ${selectedCustomer === c ? 'selected' : ''}"
+                 onclick="selectCustomer('${c.replace(/'/g, "\\'")}')">
+                <span class="customer-name">${c}</span>
+                <span class="customer-check">✓</span>
+            </div>
+        `).join('');
+    }
+
+    // ── Select customer ──
+    function selectCustomer(name) {
+        selectedCustomer = name;
+
+        // Update list highlight
+        document.querySelectorAll('.customer-item').forEach(el => {
+            el.classList.toggle('selected', el.querySelector('.customer-name').textContent === name);
+        });
+
+        // Update export panel
+        const panel = document.getElementById('export-panel');
+        const nameEl = document.getElementById('export-name');
+        const subEl = document.getElementById('export-sub');
+        const btn = document.getElementById('export-btn');
+
+        panel.classList.add('active');
+        nameEl.textContent = name;
+        nameEl.classList.remove('placeholder');
+        subEl.textContent = 'CSV includes hardware specs, OS, disk, RAM & more';
+        btn.disabled = false;
+    }
+
+    // ── Search filter ──
+    document.getElementById('customer-search').addEventListener('input', function () {
+        const q = this.value.trim().toLowerCase();
+        const filtered = q ? allCustomers.filter(c => c.toLowerCase().includes(q)) : allCustomers;
+        renderList(filtered);
+    });
+
+    // ── Export ──
+    document.getElementById('export-btn').addEventListener('click', async function () {
+        if (!selectedCustomer) return;
+
+        const btn = this;
+        const originalHTML = btn.innerHTML;
+
+        // Loading state
+        btn.innerHTML = '<div class="spinner"></div> Generating...';
+        btn.classList.add('loading');
+        btn.disabled = true;
+
+        document.getElementById('export-sub').textContent = 'Fetching device data from N-able...';
+        showToast(`Preparing export for ${selectedCustomer}...`, 'info', '⏳');
+
+        try {
+            const url = `/api/export?customer=${encodeURIComponent(selectedCustomer)}`;
+            const res = await fetch(url);
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+                throw new Error(err.error || `HTTP ${res.status}`);
+            }
+
+            // Trigger download
+            const blob = await res.blob();
+            const disposition = res.headers.get('Content-Disposition') || '';
+            const match = disposition.match(/filename="([^"]+)"/);
+            const filename = match ? match[1] : `export_${Date.now()}.csv`;
+
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(a.href);
+
+            const now = new Date().toLocaleTimeString();
+            document.getElementById('export-sub').textContent = `Downloaded at ${now} — opens in Excel`;
+            showToast(`${selectedCustomer} exported successfully`, 'success', '✅');
+
+        } catch (e) {
+            document.getElementById('export-sub').textContent = `Export failed: ${e.message}`;
+            showToast(`Export failed: ${e.message}`, 'error', '⚠️');
+        } finally {
+            btn.innerHTML = originalHTML;
+            btn.classList.remove('loading');
+            btn.disabled = false;
+        }
+    });
+
+    // ── Init ──
+    loadCustomers();
+</script>
+</body>
+</html>
