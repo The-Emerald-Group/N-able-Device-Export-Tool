@@ -345,6 +345,28 @@ def fetch_customer_rows(customer_name):
     return rows
 
 
+def fetch_all_customer_rows():
+    """Fetch + extract all fields for every device across all customers."""
+    token = get_access_token()
+    h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    all_devices = fetch_all_devices(h)
+    log(f"  {len(all_devices)} total devices across all customers")
+
+    rows = []
+    for i, dev in enumerate(all_devices):
+        dev_id = dev.get('deviceId')
+        if not dev_id:
+            continue
+        if i > 0:
+            time.sleep(ASSET_FETCH_DELAY)
+        detail = fetch_device_detail(dev_id, h)
+        assets = fetch_device_assets(dev_id, h)
+        rows.append(extract_all_fields(dev, detail, assets))
+
+    return rows
+
+
 # ── CSV export ────────────────────────────────────────────────────────────────
 
 def generate_csv(rows, selected_columns):
@@ -573,7 +595,6 @@ class Handler(BaseHTTPRequestHandler):
             self._file('index.html', 'text/html')
 
         elif path == '/api/columns':
-            # Return all available columns with labels and groups
             self._json(200, {
                 'columns': [
                     {'key': k, 'label': l, 'group': g}
@@ -602,39 +623,28 @@ class Handler(BaseHTTPRequestHandler):
 
             try:
                 log(f"Generating {fmt.upper()} export for: {customer} ({len(selected)} columns)")
-                rows     = fetch_customer_rows(customer)
+                rows      = fetch_customer_rows(customer)
                 safe_name = customer.replace(' ', '_').replace('/', '-')
                 ts        = datetime.now().strftime('%Y%m%d_%H%M')
-
-                if fmt == 'pdf':
-                    pdf_bytes = generate_pdf(rows, selected, customer)
-                    filename  = f"{safe_name}_devices_{ts}.pdf"
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/pdf')
-                    self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
-                    self._cors()
-                    self.end_headers()
-                    try:
-                        self.wfile.write(pdf_bytes)
-                    except (BrokenPipeError, ConnectionResetError):
-                        pass
-                    log(f"PDF delivered: {customer} ({len(pdf_bytes)} bytes)")
-                else:
-                    csv_bytes = generate_csv(rows, selected)
-                    filename  = f"{safe_name}_devices_{ts}.csv"
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/csv; charset=utf-8')
-                    self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
-                    self._cors()
-                    self.end_headers()
-                    try:
-                        self.wfile.write(csv_bytes)
-                    except (BrokenPipeError, ConnectionResetError):
-                        pass
-                    log(f"CSV delivered: {customer} ({len(csv_bytes)} bytes)")
-
+                self._deliver(fmt, rows, selected, safe_name, ts, customer)
             except Exception as e:
                 log(f"Export error: {e}\n{traceback.format_exc()}")
+                self._json(500, {'error': str(e)})
+
+        elif path == '/api/export-all':
+            fmt      = qs.get('format', ['csv'])[0].lower()
+            cols_raw = qs.get('columns', [','.join(DEFAULT_COLUMNS)])[0]
+            selected = [c.strip() for c in cols_raw.split(',') if c.strip() in COLUMN_KEYS]
+            if not selected:
+                selected = DEFAULT_COLUMNS
+
+            try:
+                log(f"Generating {fmt.upper()} export for ALL customers ({len(selected)} columns)")
+                rows = fetch_all_customer_rows()
+                ts   = datetime.now().strftime('%Y%m%d_%H%M')
+                self._deliver(fmt, rows, selected, "all_customers", ts, "All Customers")
+            except Exception as e:
+                log(f"Export-all error: {e}\n{traceback.format_exc()}")
                 self._json(500, {'error': str(e)})
 
         elif path == '/api/debug':
@@ -655,6 +665,35 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def _deliver(self, fmt, rows, selected, safe_name, ts, display_name):
+        """Stream a CSV or PDF response."""
+        if fmt == 'pdf':
+            pdf_bytes = generate_pdf(rows, selected, display_name)
+            filename  = f"{safe_name}_devices_{ts}.pdf"
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/pdf')
+            self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+            self._cors()
+            self.end_headers()
+            try:
+                self.wfile.write(pdf_bytes)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            log(f"PDF delivered: {display_name} ({len(pdf_bytes)} bytes)")
+        else:
+            csv_bytes = generate_csv(rows, selected)
+            filename  = f"{safe_name}_devices_{ts}.csv"
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/csv; charset=utf-8')
+            self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+            self._cors()
+            self.end_headers()
+            try:
+                self.wfile.write(csv_bytes)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            log(f"CSV delivered: {display_name} ({len(csv_bytes)} bytes)")
 
     def _file(self, filename, content_type):
         try:
