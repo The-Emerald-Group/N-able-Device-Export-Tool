@@ -23,6 +23,8 @@
             --green:     #00e59a;
             --red:       #ff4a60;
             --amber:     #ffb830;
+            --purple:    #a78bfa;
+            --purple-d:  rgba(167,139,250,.08);
             --mono:      'IBM Plex Mono', monospace;
             --sans:      'IBM Plex Sans', sans-serif;
         }
@@ -264,6 +266,54 @@
 
         .export-btns { display: flex; gap: 10px; flex-shrink: 0; }
 
+        /* ── Export All panel ───────────────────────────────────────── */
+        .export-all-panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+        .export-all-panel::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 10px;
+            background: linear-gradient(135deg, rgba(167,139,250,.04) 0%, transparent 60%);
+            pointer-events: none;
+        }
+        .export-all-head {
+            padding: 14px 20px;
+            background: var(--surface2);
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .export-all-title {
+            font-family: var(--mono); font-size: .62rem;
+            letter-spacing: .18em; color: var(--purple);
+            text-transform: uppercase;
+        }
+        .export-all-body {
+            display: flex; align-items: center; gap: 20px;
+            padding: 20px;
+        }
+        .export-all-info { flex: 1; }
+        .export-all-name {
+            font-size: 1.05rem; font-weight: 600; color: var(--text);
+            display: flex; align-items: center; gap: 8px;
+        }
+        .all-badge {
+            font-family: var(--mono); font-size: .62rem;
+            color: var(--purple); background: var(--purple-d);
+            border: 1px solid rgba(167,139,250,.25);
+            border-radius: 4px; padding: 2px 7px;
+        }
+        .export-all-hint {
+            font-family: var(--mono); font-size: .68rem;
+            color: var(--text2); margin-top: 4px;
+        }
+        .export-all-btns { display: flex; gap: 10px; flex-shrink: 0; }
+
         .btn {
             display: flex; align-items: center; gap: 7px;
             padding: 11px 20px;
@@ -289,9 +339,40 @@
             transform: translateY(-1px);
             box-shadow: 0 4px 16px rgba(255,184,48,.15);
         }
+        /* Purple-tinted variants for the all-export buttons */
+        .btn-all-csv {
+            background: var(--purple); color: #0a0a12;
+        }
+        .btn-all-csv:hover:not(:disabled) {
+            background: #c4b5fd; transform: translateY(-1px);
+            box-shadow: 0 4px 20px rgba(167,139,250,.35);
+        }
+        .btn-all-pdf {
+            background: var(--surface3); color: var(--text);
+            border: 1px solid var(--border2);
+        }
+        .btn-all-pdf:hover:not(:disabled) {
+            border-color: var(--amber); color: var(--amber);
+            background: rgba(255,184,48,.06);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(255,184,48,.15);
+        }
         .btn.loading { pointer-events: none; }
         .spinner { width: 13px; height: 13px; border: 2px solid rgba(0,0,0,.2); border-top-color: currentColor; border-radius: 50%; animation: spin .65s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Warning callout */
+        .warn-callout {
+            margin-top: 12px;
+            padding: 10px 14px;
+            background: rgba(255,184,48,.05);
+            border: 1px solid rgba(255,184,48,.2);
+            border-radius: 7px;
+            font-family: var(--mono); font-size: .68rem;
+            color: var(--amber);
+            display: flex; align-items: flex-start; gap: 8px;
+        }
+        .warn-callout svg { flex-shrink: 0; margin-top: 1px; }
 
         /* ── Toast ──────────────────────────────────────────────────── */
         .toast {
@@ -312,7 +393,7 @@
         /* ── Responsive ─────────────────────────────────────────────── */
         @media (max-width: 820px) {
             .layout { grid-template-columns: 1fr; }
-            .export-btns { flex-direction: column; }
+            .export-btns, .export-all-btns { flex-direction: column; }
         }
         @media (max-width: 500px) {
             .wrap { padding: 24px 14px 60px; }
@@ -385,8 +466,11 @@
                 </div>
             </div>
 
-            <!-- Export action panel -->
+            <!-- Export single customer panel -->
             <div class="panel">
+                <div class="panel-head">
+                    <span class="panel-title">Export — Single Customer</span>
+                </div>
                 <div class="export-panel-body">
                     <div class="export-info">
                         <div class="export-target-label">Export Target</div>
@@ -399,6 +483,40 @@
                             CSV
                         </button>
                         <button class="btn btn-pdf" id="btn-pdf" disabled onclick="doExport('pdf')">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                            PDF
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Export ALL customers panel -->
+            <div class="export-all-panel">
+                <div class="export-all-head">
+                    <span class="export-all-title">Export — All Customers</span>
+                    <span class="all-badge" id="all-badge">– devices</span>
+                </div>
+                <div class="export-all-body">
+                    <div class="export-all-info">
+                        <div class="export-target-label">Export Target</div>
+                        <div class="export-all-name">
+                            All Customers
+                            <span class="all-badge" id="all-cust-badge">loading…</span>
+                        </div>
+                        <div class="export-all-hint" id="export-all-hint">
+                            Exports every device across all customers into one file
+                        </div>
+                        <div class="warn-callout">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            This queries every device individually — may take several minutes for large environments.
+                        </div>
+                    </div>
+                    <div class="export-all-btns">
+                        <button class="btn btn-all-csv" id="btn-all-csv" onclick="doExportAll('csv')">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            CSV
+                        </button>
+                        <button class="btn btn-all-pdf" id="btn-all-pdf" onclick="doExportAll('pdf')">
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                             PDF
                         </button>
@@ -487,6 +605,7 @@ function toggleCol(key, chip) {
     }
     updateSelCount();
     updateExportHint();
+    updateExportBtns();
 }
 
 function updateSelCount() {
@@ -499,12 +618,12 @@ function applyPreset(name) {
     selectedCols.clear();
     const keys = PRESETS[name] || allColumns.map(c => c.key);
     keys.forEach(k => selectedCols.add(k));
-    // Re-render chips
     document.querySelectorAll('.col-chip').forEach(chip => {
         chip.classList.toggle('active', selectedCols.has(chip.dataset.key));
     });
     updateSelCount();
     updateExportHint();
+    updateExportBtns();
 }
 
 function toggleAll() {
@@ -518,6 +637,7 @@ function toggleAll() {
     });
     updateSelCount();
     updateExportHint();
+    updateExportBtns();
 }
 
 // ── Customer loader ───────────────────────────────────────────────────────────
@@ -529,11 +649,13 @@ async function loadCustomers() {
         allCustomers = data.customers || [];
         document.getElementById('status-line').textContent = `${allCustomers.length} customers`;
         document.getElementById('customer-search').disabled = false;
+        document.getElementById('all-cust-badge').textContent = `${allCustomers.length} customers`;
         renderList(allCustomers);
     } catch (e) {
         document.getElementById('customer-list').innerHTML =
             `<div class="err-msg">⚠ Failed to load customers<br><small>${e.message}</small></div>`;
         document.getElementById('status-line').textContent = 'Connection error';
+        document.getElementById('all-cust-badge').textContent = 'error';
         toast('Could not connect to N-able API', 'error', '⚠️');
     }
 }
@@ -587,16 +709,20 @@ function updateExportBtns() {
     const ok = !!selectedCustomer && selectedCols.size > 0;
     document.getElementById('btn-csv').disabled = !ok;
     document.getElementById('btn-pdf').disabled = !ok;
+
+    const okAll = selectedCols.size > 0;
+    document.getElementById('btn-all-csv').disabled = !okAll;
+    document.getElementById('btn-all-pdf').disabled = !okAll;
 }
 
-// ── Export ────────────────────────────────────────────────────────────────────
+// ── Export single customer ────────────────────────────────────────────────────
 async function doExport(fmt) {
     if (!selectedCustomer || selectedCols.size === 0) return;
 
-    const btnId   = fmt === 'pdf' ? 'btn-pdf' : 'btn-csv';
-    const btn     = document.getElementById(btnId);
+    const btnId    = fmt === 'pdf' ? 'btn-pdf' : 'btn-csv';
+    const btn      = document.getElementById(btnId);
     const origHTML = btn.innerHTML;
-    const label   = fmt.toUpperCase();
+    const label    = fmt.toUpperCase();
 
     btn.innerHTML = `<div class="spinner"></div> Generating ${label}…`;
     btn.classList.add('loading');
@@ -604,6 +730,7 @@ async function doExport(fmt) {
 
     const other = document.getElementById(fmt === 'pdf' ? 'btn-csv' : 'btn-pdf');
     other.disabled = true;
+    lockAllExport(true);
 
     document.getElementById('export-hint').textContent = `Fetching device data… this may take a moment`;
     toast(`Preparing ${label} for ${selectedCustomer}…`, 'info', '⏳');
@@ -611,52 +738,87 @@ async function doExport(fmt) {
     try {
         const cols = Array.from(selectedCols).join(',');
         const url  = `/api/export?customer=${encodeURIComponent(selectedCustomer)}&format=${fmt}&columns=${encodeURIComponent(cols)}`;
-        const res  = await fetch(url);
-
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-            throw new Error(err.error || `HTTP ${res.status}`);
-        }
-
-        const blob = await res.blob();
-        const disp = res.headers.get('Content-Disposition') || '';
-        const match = disp.match(/filename="([^"]+)"/);
-        const filename = match ? match[1] : `export_${Date.now()}.${fmt}`;
-
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename;
-        document.body.appendChild(a); a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(a.href);
-
-        document.getElementById('export-hint').textContent =
-            `Downloaded at ${new Date().toLocaleTimeString()}`;
+        await downloadFile(url, fmt);
+        document.getElementById('export-hint').textContent = `Downloaded at ${new Date().toLocaleTimeString()}`;
         toast(`${selectedCustomer} — ${label} downloaded`, 'success', '✅');
-
     } catch (e) {
         document.getElementById('export-hint').textContent = `Export failed: ${e.message}`;
         toast(`Export failed: ${e.message}`, 'error', '⚠️');
     } finally {
         btn.innerHTML = origHTML;
         btn.classList.remove('loading');
+        lockAllExport(false);
         updateExportBtns();
     }
 }
 
-// Keep export buttons in sync whenever columns change
-const origToggleCol = toggleCol;
-const origApplyPreset = applyPreset;
-const origToggleAll  = toggleAll;
+// ── Export all customers ──────────────────────────────────────────────────────
+async function doExportAll(fmt) {
+    if (selectedCols.size === 0) return;
 
-// Patch col operations to also update buttons
-(function(){
-    const ops = ['toggleCol','applyPreset','toggleAll'];
-    const wrap = fn => function() { fn.apply(this, arguments); updateExportBtns(); };
-    window.toggleCol   = (key, chip) => { origToggleCol(key, chip); updateExportBtns(); };
-    window.applyPreset = (name)      => { origApplyPreset(name);    updateExportBtns(); };
-    window.toggleAll   = ()          => { origToggleAll();           updateExportBtns(); };
-})();
+    const btnId    = fmt === 'pdf' ? 'btn-all-pdf' : 'btn-all-csv';
+    const btn      = document.getElementById(btnId);
+    const origHTML = btn.innerHTML;
+    const label    = fmt.toUpperCase();
+
+    btn.innerHTML = `<div class="spinner"></div> Generating ${label}…`;
+    btn.classList.add('loading');
+    btn.disabled = true;
+
+    const other = document.getElementById(fmt === 'pdf' ? 'btn-all-csv' : 'btn-all-pdf');
+    other.disabled = true;
+    lockSingleExport(true);
+
+    document.getElementById('export-all-hint').textContent = `Fetching all devices… this may take several minutes`;
+    toast(`Preparing ${label} for all customers…`, 'info', '⏳');
+
+    try {
+        const cols = Array.from(selectedCols).join(',');
+        const url  = `/api/export-all?format=${fmt}&columns=${encodeURIComponent(cols)}`;
+        await downloadFile(url, fmt);
+        document.getElementById('export-all-hint').textContent = `Downloaded at ${new Date().toLocaleTimeString()}`;
+        toast(`All customers — ${label} downloaded`, 'success', '✅');
+    } catch (e) {
+        document.getElementById('export-all-hint').textContent = `Export failed: ${e.message}`;
+        toast(`Export failed: ${e.message}`, 'error', '⚠️');
+    } finally {
+        btn.innerHTML = origHTML;
+        btn.classList.remove('loading');
+        lockSingleExport(false);
+        updateExportBtns();
+    }
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+async function downloadFile(url, fmt) {
+    const res = await fetch(url);
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const disp = res.headers.get('Content-Disposition') || '';
+    const match = disp.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : `export_${Date.now()}.${fmt}`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+}
+
+function lockAllExport(locked) {
+    ['btn-all-csv', 'btn-all-pdf'].forEach(id => {
+        document.getElementById(id).disabled = locked;
+    });
+}
+
+function lockSingleExport(locked) {
+    ['btn-csv', 'btn-pdf'].forEach(id => {
+        document.getElementById(id).disabled = locked;
+    });
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 Promise.all([loadColumns(), loadCustomers()]);
