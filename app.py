@@ -7,6 +7,7 @@ import threading
 import traceback
 import csv
 import io
+from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -324,46 +325,93 @@ def get_customers_list():
 
 def fetch_customer_rows(customer_name):
     """Fetch + extract all fields for every device of a customer."""
+    log(f"[{customer_name}] Authenticating...")
     token = get_access_token()
     h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
+    log(f"[{customer_name}] Fetching device list...")
     all_devices = fetch_all_devices(h)
     customer_devices = [d for d in all_devices if d.get('customerName') == customer_name]
-    log(f"  {len(customer_devices)} devices found for {customer_name}")
+    total = len(customer_devices)
+    log(f"[{customer_name}] {total} device(s) found — starting detail fetch")
 
     rows = []
-    for i, dev in enumerate(customer_devices):
-        dev_id = dev.get('deviceId')
+    skipped = 0
+    t_start = time.time()
+
+    for i, dev in enumerate(customer_devices, start=1):
+        dev_id   = dev.get('deviceId')
+        dev_name = dev.get('longName') or dev.get('name') or str(dev_id)
         if not dev_id:
+            log(f"[{customer_name}]   [{i}/{total}] SKIP — no deviceId ({dev_name})")
+            skipped += 1
             continue
-        if i > 0:
+
+        if i > 1:
             time.sleep(ASSET_FETCH_DELAY)
+
+        elapsed  = time.time() - t_start
+        avg_each = elapsed / (i - 1) if i > 1 else 0
+        eta_secs = int(avg_each * (total - i + 1)) if avg_each else 0
+        eta_str  = f"ETA ~{eta_secs}s" if eta_secs else "ETA unknown"
+
+        log(f"[{customer_name}]   [{i}/{total}] {dev_name}  ({eta_str})")
+
         detail = fetch_device_detail(dev_id, h)
         assets = fetch_device_assets(dev_id, h)
         rows.append(extract_all_fields(dev, detail, assets))
 
+    elapsed_total = time.time() - t_start
+    log(f"[{customer_name}] Done — {len(rows)} rows built, {skipped} skipped, {elapsed_total:.1f}s elapsed")
     return rows
 
 
 def fetch_all_customer_rows():
     """Fetch + extract all fields for every device across all customers."""
+    log("[ALL] Authenticating...")
     token = get_access_token()
     h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
+    log("[ALL] Fetching full device list...")
     all_devices = fetch_all_devices(h)
-    log(f"  {len(all_devices)} total devices across all customers")
+    total = len(all_devices)
+    log(f"[ALL] {total} device(s) across all customers — starting detail fetch")
+
+    # Log a per-customer breakdown so you know what's coming
+    customer_counts = Counter(d.get('customerName', 'Unknown') for d in all_devices)
+    for cust, count in sorted(customer_counts.items()):
+        log(f"[ALL]   {cust}: {count} device(s)")
 
     rows = []
-    for i, dev in enumerate(all_devices):
-        dev_id = dev.get('deviceId')
+    skipped = 0
+    t_start = time.time()
+
+    for i, dev in enumerate(all_devices, start=1):
+        dev_id    = dev.get('deviceId')
+        dev_name  = dev.get('longName') or dev.get('name') or str(dev_id)
+        cust_name = dev.get('customerName', 'Unknown')
         if not dev_id:
+            log(f"[ALL]   [{i}/{total}] SKIP — no deviceId ({dev_name} / {cust_name})")
+            skipped += 1
             continue
-        if i > 0:
+
+        if i > 1:
             time.sleep(ASSET_FETCH_DELAY)
+
+        elapsed  = time.time() - t_start
+        avg_each = elapsed / (i - 1) if i > 1 else 0
+        eta_secs = int(avg_each * (total - i + 1)) if avg_each else 0
+        eta_str  = f"ETA ~{eta_secs}s" if eta_secs > 0 else "calculating..."
+
+        pct = int((i / total) * 100)
+        log(f"[ALL]   [{i}/{total}] {pct}%  {dev_name} ({cust_name})  {eta_str}")
+
         detail = fetch_device_detail(dev_id, h)
         assets = fetch_device_assets(dev_id, h)
         rows.append(extract_all_fields(dev, detail, assets))
 
+    elapsed_total = time.time() - t_start
+    log(f"[ALL] Done — {len(rows)} rows built, {skipped} skipped, {elapsed_total:.1f}s total")
     return rows
 
 
