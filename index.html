@@ -74,6 +74,10 @@
         .panel-title {
             font-size: 1rem; font-weight: bold;
             text-transform: uppercase; letter-spacing: 1px;
+            display: flex; align-items: center; gap: 12px;
+        }
+        .panel-hint {
+            font-size: 0.7rem; color: var(--text-dim); font-weight: normal; font-style: italic; text-transform: none; letter-spacing: 0;
         }
 
         /* ── Customer search ── */
@@ -154,7 +158,12 @@
             margin-bottom: 10px; display: flex; align-items: center; gap: 10px;
         }
         .col-section-name::after { content: ''; flex: 1; height: 1px; background: var(--border2); }
-        .col-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+        
+        .col-grid { 
+            display: flex; flex-wrap: wrap; gap: 8px; 
+            min-height: 40px; /* Allows dropping into empty categories */
+            padding-bottom: 5px; 
+        }
 
         .col-chip {
             display: flex; align-items: center; gap: 6px;
@@ -162,10 +171,12 @@
             background: var(--raised);
             border: 1px solid var(--border);
             border-radius: 6px;
-            cursor: pointer; font-size: .8rem; font-weight: 500;
+            cursor: grab; font-size: .8rem; font-weight: 500;
             color: var(--text-mid);
-            transition: all .15s; user-select: none;
+            transition: background 0.15s, border-color 0.15s, color 0.15s; 
+            user-select: none;
         }
+        .col-chip:active { cursor: grabbing; }
         .col-chip:hover { border-color: var(--accent); color: var(--text); }
         .col-chip.active {
             background: rgba(0, 161, 228, 0.15);
@@ -178,6 +189,12 @@
             transition: background .15s;
         }
         .col-chip.active .chip-dot { background: var(--accent); }
+        
+        /* Drag state styling */
+        .col-chip.dragging {
+            opacity: 0.4;
+            border-style: dashed;
+        }
 
         /* Presets bar */
         .presets-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; background: var(--raised); padding: 10px 14px; border-radius: 8px;}
@@ -319,7 +336,10 @@
 
             <div class="panel" style="border-left-color: #2a2a2a;">
                 <div class="panel-head">
-                    <span class="panel-title">Choose Columns</span>
+                    <span class="panel-title">
+                        Choose Columns 
+                        <span class="panel-hint">(Drag & drop to order exports)</span>
+                    </span>
                     <span class="col-counter">
                         <strong id="sel-count">0</strong> selected
                     </span>
@@ -402,6 +422,7 @@ let allCustomers   = [];
 let selectedCustomer = null;
 let allColumns     = []; 
 let selectedCols   = new Set();
+let draggedChip    = null; // For drag and drop
 
 const PRESETS = {
     essential: ['device_name','device_class','ip_address','os','os_version','ram_total','disk_total','last_seen'],
@@ -447,17 +468,70 @@ function renderColumnPicker() {
         container.appendChild(sec);
 
         const grid = sec.querySelector('.col-grid');
+        
+        // Add drag & drop listeners to the grid container to allow dropping into empty groups
+        grid.addEventListener('dragover', handleDragOver);
+        grid.addEventListener('drop', function(e) {
+            if (e.target === this && draggedChip) {
+                this.appendChild(draggedChip);
+            }
+        });
+
         for (const col of cols) {
             const chip = document.createElement('div');
             chip.className = 'col-chip' + (selectedCols.has(col.key) ? ' active' : '');
             chip.dataset.key = col.key;
+            chip.draggable = true;
             chip.innerHTML = `<span class="chip-dot"></span>${col.label}`;
+            
+            // Toggle selection
             chip.onclick = () => toggleCol(col.key, chip);
+            
+            // Drag and drop events
+            chip.addEventListener('dragstart', handleDragStart);
+            chip.addEventListener('dragover', handleDragOver);
+            chip.addEventListener('drop', handleDrop);
+            chip.addEventListener('dragend', handleDragEnd);
+            
             grid.appendChild(chip);
         }
     }
 }
 
+// ── Drag and Drop Logic ──
+function handleDragStart(e) {
+    draggedChip = this;
+    e.dataTransfer.effectAllowed = 'move';
+    setTimeout(() => this.classList.add('dragging'), 0);
+}
+
+function handleDragOver(e) {
+    e.preventDefault(); // Necessary to allow dropping
+    e.dataTransfer.dropEffect = 'move';
+    return false;
+}
+
+function handleDrop(e) {
+    e.stopPropagation(); // Prevents dropping onto the grid if we dropped on a chip
+    if (draggedChip && draggedChip !== this && this.classList.contains('col-chip')) {
+        const targetRect = this.getBoundingClientRect();
+        // Check if cursor is on the left or right side of the target chip
+        const dropNext = (e.clientX - targetRect.left) > (targetRect.width / 2);
+        if (dropNext) {
+            this.parentNode.insertBefore(draggedChip, this.nextSibling);
+        } else {
+            this.parentNode.insertBefore(draggedChip, this);
+        }
+    }
+    return false;
+}
+
+function handleDragEnd(e) {
+    if(draggedChip) draggedChip.classList.remove('dragging');
+    draggedChip = null;
+}
+
+// ── Interaction Logic ──
 function toggleCol(key, chip) {
     if (selectedCols.has(key)) {
         selectedCols.delete(key);
@@ -578,6 +652,14 @@ function updateExportBtns() {
     document.getElementById('btn-all-pdf').disabled = !okAll;
 }
 
+// ── Export Builders ──
+// Grabs the columns directly from the DOM so it respects the user's drag-and-drop visual order
+function getOrderedColumns() {
+    return Array.from(document.querySelectorAll('.col-chip.active'))
+                .map(chip => chip.dataset.key)
+                .join(',');
+}
+
 // ── Export single customer ──
 async function doExport(fmt) {
     if (!selectedCustomer || selectedCols.size === 0) return;
@@ -599,8 +681,8 @@ async function doExport(fmt) {
     toast(`Preparing ${label} for ${selectedCustomer}…`, 'info', '⏳');
 
     try {
-        const cols = Array.from(selectedCols).join(',');
-        const url  = `/api/export?customer=${encodeURIComponent(selectedCustomer)}&format=${fmt}&columns=${encodeURIComponent(cols)}`;
+        const orderedCols = getOrderedColumns();
+        const url  = `/api/export?customer=${encodeURIComponent(selectedCustomer)}&format=${fmt}&columns=${encodeURIComponent(orderedCols)}`;
         await downloadFile(url, fmt);
         document.getElementById('export-hint').textContent = `Downloaded at ${new Date().toLocaleTimeString()}`;
         toast(`${selectedCustomer} — ${label} downloaded`, 'success', '✅');
@@ -636,8 +718,8 @@ async function doExportAll(fmt) {
     toast(`Preparing ${label} for all customers…`, 'info', '⏳');
 
     try {
-        const cols = Array.from(selectedCols).join(',');
-        const url  = `/api/export-all?format=${fmt}&columns=${encodeURIComponent(cols)}`;
+        const orderedCols = getOrderedColumns();
+        const url  = `/api/export-all?format=${fmt}&columns=${encodeURIComponent(orderedCols)}`;
         await downloadFile(url, fmt);
         document.getElementById('export-all-hint').textContent = `Downloaded at ${new Date().toLocaleTimeString()}`;
         toast(`All customers — ${label} downloaded`, 'success', '✅');
