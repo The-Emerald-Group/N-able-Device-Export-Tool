@@ -111,12 +111,11 @@
         }
 
         #customer-list {
-            max-height: 400px; overflow-y: auto;
+            max-height: 480px; overflow-y: auto;
             display: flex; flex-direction: column; gap: 4px;
             padding-right: 5px;
         }
         
-        /* Custom sleek scrollbar */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 4px; }
         ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
@@ -137,6 +136,25 @@
             background: rgba(0, 161, 228, 0.1); 
             border-left: 4px solid var(--accent);
         }
+        
+        /* Sub-company (Site) styling */
+        .cust-item.is-site {
+            padding-left: 34px;
+            font-size: .8rem;
+            background: transparent;
+            border: 1px solid transparent;
+            margin-top: -2px; 
+        }
+        .cust-item.is-site:hover {
+            border-color: var(--border2); 
+            background: #1e1e1e;
+        }
+        .cust-item.is-site.selected {
+            border-color: var(--accent); 
+            background: rgba(0, 161, 228, 0.1); 
+            border-left: 4px solid var(--accent);
+        }
+
         .cust-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .cust-check { color: var(--accent); font-size: .8rem; opacity: 0; transition: opacity .15s; flex-shrink: 0; }
         .cust-item.selected .cust-check { opacity: 1; }
@@ -161,7 +179,7 @@
         
         .col-grid { 
             display: flex; flex-wrap: wrap; gap: 8px; 
-            min-height: 40px; /* Allows dropping into empty categories */
+            min-height: 40px; 
             padding-bottom: 5px; 
         }
 
@@ -190,13 +208,11 @@
         }
         .col-chip.active .chip-dot { background: var(--accent); }
         
-        /* Drag state styling */
         .col-chip.dragging {
             opacity: 0.4;
             border-style: dashed;
         }
 
-        /* Presets bar */
         .presets-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; background: var(--raised); padding: 10px 14px; border-radius: 8px;}
         .preset-label { font-size: .7rem; font-weight: bold; letter-spacing: 1px; color: var(--text-dim); text-transform: uppercase; margin-right: 5px; }
         .preset-btn {
@@ -218,7 +234,6 @@
         }
         .select-all-btn:hover { color: var(--text); }
 
-        /* Selection counter */
         .col-counter { font-size: .75rem; color: var(--text-dim); font-weight: bold; text-transform: uppercase; letter-spacing: 1px;}
         .col-counter strong { color: var(--accent); font-size: 1rem;}
 
@@ -260,7 +275,6 @@
         .spinner { width: 14px; height: 14px; border: 2px solid rgba(0,0,0,.2); border-top-color: currentColor; border-radius: 50%; animation: spin .65s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* Warning callout */
         .warn-callout {
             margin-top: 15px;
             padding: 12px 14px;
@@ -288,7 +302,6 @@
         .toast.error   { border-left-color: var(--red); }
         .toast.info    { border-left-color: var(--accent); }
 
-        /* ── Responsive ── */
         @media (max-width: 820px) {
             .layout { grid-template-columns: 1fr; }
             .export-panel-body { flex-direction: column; align-items: flex-start; }
@@ -314,15 +327,15 @@
 
         <div class="panel" style="border-left-color: var(--accent);">
             <div class="panel-head">
-                <span class="panel-title">Select Customer</span>
+                <span class="panel-title">Select Target</span>
                 <span id="cust-badge" class="badge" style="display:none"></span>
             </div>
             <div class="search-wrap">
                 <span class="search-icon">🔍</span>
-                <input type="text" id="customer-search" placeholder="Filter customers…" disabled autocomplete="off">
+                <input type="text" id="customer-search" placeholder="Filter customers & sites…" disabled autocomplete="off">
             </div>
             <div class="list-meta">
-                <span class="list-meta-label">Customer Directory</span>
+                <span class="list-meta-label">Directory</span>
             </div>
             <div id="customer-list">
                 <div class="skeleton"></div>
@@ -359,13 +372,13 @@
 
             <div class="panel" style="border-left-color: var(--green);">
                 <div class="panel-head" style="margin-bottom:0;">
-                    <span class="panel-title">Export Single Customer</span>
+                    <span class="panel-title">Export Selection</span>
                 </div>
                 <div class="export-panel-body">
                     <div class="export-info">
                         <div class="export-target-label">Export Target</div>
-                        <div class="export-target-name placeholder" id="export-name">No customer selected</div>
-                        <div class="export-hint" id="export-hint">Select a customer and columns above</div>
+                        <div class="export-target-name placeholder" id="export-name">No target selected</div>
+                        <div class="export-hint" id="export-hint">Select a customer or site above</div>
                     </div>
                     <div class="export-btns">
                         <button class="btn btn-csv" id="btn-csv" disabled onclick="doExport('csv')">
@@ -418,11 +431,12 @@
 
 <script>
 // ── State ──
-let allCustomers   = [];
-let selectedCustomer = null;
+let rawCustomers   = [];
+let allTargets     = [];
+let selectedTarget = null; // {customer: string, site: string|null}
 let allColumns     = []; 
 let selectedCols   = new Set();
-let draggedChip    = null; // For drag and drop
+let draggedChip    = null;
 
 const PRESETS = {
     essential: ['device_name','device_class','ip_address','os','os_version','ram_total','disk_total','last_seen'],
@@ -431,7 +445,6 @@ const PRESETS = {
     full:      null, 
 };
 
-// ── Toast ──
 function toast(msg, type = 'info', icon = 'ℹ️') {
     const t = document.getElementById('toast');
     document.getElementById('toast-msg').textContent = msg;
@@ -469,7 +482,6 @@ function renderColumnPicker() {
 
         const grid = sec.querySelector('.col-grid');
         
-        // Add drag & drop listeners to the grid container to allow dropping into empty groups
         grid.addEventListener('dragover', handleDragOver);
         grid.addEventListener('drop', function(e) {
             if (e.target === this && draggedChip) {
@@ -484,10 +496,8 @@ function renderColumnPicker() {
             chip.draggable = true;
             chip.innerHTML = `<span class="chip-dot"></span>${col.label}`;
             
-            // Toggle selection
             chip.onclick = () => toggleCol(col.key, chip);
             
-            // Drag and drop events
             chip.addEventListener('dragstart', handleDragStart);
             chip.addEventListener('dragover', handleDragOver);
             chip.addEventListener('drop', handleDrop);
@@ -498,7 +508,6 @@ function renderColumnPicker() {
     }
 }
 
-// ── Drag and Drop Logic ──
 function handleDragStart(e) {
     draggedChip = this;
     e.dataTransfer.effectAllowed = 'move';
@@ -506,16 +515,15 @@ function handleDragStart(e) {
 }
 
 function handleDragOver(e) {
-    e.preventDefault(); // Necessary to allow dropping
+    e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     return false;
 }
 
 function handleDrop(e) {
-    e.stopPropagation(); // Prevents dropping onto the grid if we dropped on a chip
+    e.stopPropagation();
     if (draggedChip && draggedChip !== this && this.classList.contains('col-chip')) {
         const targetRect = this.getBoundingClientRect();
-        // Check if cursor is on the left or right side of the target chip
         const dropNext = (e.clientX - targetRect.left) > (targetRect.width / 2);
         if (dropNext) {
             this.parentNode.insertBefore(draggedChip, this.nextSibling);
@@ -531,7 +539,6 @@ function handleDragEnd(e) {
     draggedChip = null;
 }
 
-// ── Interaction Logic ──
 function toggleCol(key, chip) {
     if (selectedCols.has(key)) {
         selectedCols.delete(key);
@@ -547,8 +554,7 @@ function toggleCol(key, chip) {
 
 function updateSelCount() {
     document.getElementById('sel-count').textContent = selectedCols.size;
-    const toggleBtn = document.getElementById('toggle-all-btn');
-    toggleBtn.textContent = selectedCols.size === allColumns.length ? 'Deselect All' : 'Select All';
+    document.getElementById('toggle-all-btn').textContent = selectedCols.size === allColumns.length ? 'Deselect All' : 'Select All';
 }
 
 function applyPreset(name) {
@@ -577,57 +583,99 @@ function toggleAll() {
     updateExportBtns();
 }
 
-// ── Customer loader ──
+// ── Customer & Site loader ──
 async function loadCustomers() {
     try {
         const res  = await fetch('/api/customers');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        allCustomers = data.customers || [];
-        document.getElementById('status-line').textContent = `${allCustomers.length} Customers Available`;
+        rawCustomers = data.customers || [];
+        
+        allTargets = [];
+        rawCustomers.forEach(c => {
+            allTargets.push({ type: 'customer', name: c.customer, customer: c.customer, site: null });
+            if (c.sites && c.sites.length > 0) {
+                c.sites.forEach(s => {
+                    allTargets.push({ type: 'site', name: s, customer: c.customer, site: s });
+                });
+            }
+        });
+
+        document.getElementById('status-line').textContent = `${rawCustomers.length} Customers Available`;
         document.getElementById('customer-search').disabled = false;
-        document.getElementById('all-cust-badge').textContent = `${allCustomers.length} Customers`;
-        renderList(allCustomers);
+        document.getElementById('all-cust-badge').textContent = `${rawCustomers.length} Customers`;
+        renderList(allTargets);
     } catch (e) {
         document.getElementById('customer-list').innerHTML =
-            `<div class="err-msg">⚠ Failed to load customers<br><small>${e.message}</small></div>`;
+            `<div class="err-msg">⚠ Failed to load directory<br><small>${e.message}</small></div>`;
         document.getElementById('status-line').textContent = 'Connection error';
         document.getElementById('all-cust-badge').textContent = 'error';
         toast('Could not connect to N-able API', 'error', '⚠️');
     }
 }
 
-function renderList(customers) {
+function renderList(targets) {
     const list  = document.getElementById('customer-list');
     const badge = document.getElementById('cust-badge');
-    if (!customers.length) {
-        list.innerHTML = '<div class="empty-msg">No customers match</div>';
-        badge.style.display = 'none'; return;
+    if (!targets.length) {
+        list.innerHTML = '<div class="empty-msg">No matches found</div>';
+        return;
     }
-    badge.textContent = customers.length < allCustomers.length
-        ? `${customers.length} / ${allCustomers.length}` : allCustomers.length;
-    badge.style.display = 'inline';
 
-    list.innerHTML = customers.map(c => `
-        <div class="cust-item ${selectedCustomer === c ? 'selected' : ''}"
-             onclick="selectCustomer('${c.replace(/'/g,"\\'")}')">
-            <span class="cust-name">${c}</span>
+    list.innerHTML = targets.map(t => {
+        const isSite = t.type === 'site';
+        const cssClass = isSite ? 'is-site' : 'is-customer';
+        const icon = isSite ? '<span style="opacity:0.3; margin-right:6px;">↳</span>' : '<span style="opacity:0.8; margin-right:6px;">🏢</span>';
+        const isSelected = selectedTarget && selectedTarget.customer === t.customer && selectedTarget.site === t.site;
+        
+        return `
+        <div class="cust-item ${cssClass} ${isSelected ? 'selected' : ''}" 
+             data-customer="${t.customer.replace(/"/g, '&quot;')}"
+             data-site="${t.site ? t.site.replace(/"/g, '&quot;') : ''}"
+             onclick="selectTarget(this)">
+            <span class="cust-name">${icon}${t.name}</span>
             <span class="cust-check">✓</span>
-        </div>`).join('');
+        </div>`;
+    }).join('');
 }
 
 document.getElementById('customer-search').addEventListener('input', function () {
     const q = this.value.trim().toLowerCase();
-    renderList(q ? allCustomers.filter(c => c.toLowerCase().includes(q)) : allCustomers);
+    if (!q) { 
+        renderList(allTargets); 
+        return; 
+    }
+    
+    // Find all customers that match, OR customers that have a site matching the query
+    const matchingCustomers = new Set();
+    allTargets.forEach(t => {
+        if (t.customer.toLowerCase().includes(q) || (t.site && t.site.toLowerCase().includes(q))) {
+            matchingCustomers.add(t.customer);
+        }
+    });
+
+    const filtered = allTargets.filter(t => {
+        if (t.type === 'customer') {
+            return matchingCustomers.has(t.customer);
+        } else {
+            // Show site if the site specifically matched, or if the parent customer matched directly
+            return (t.site.toLowerCase().includes(q)) || (t.customer.toLowerCase().includes(q));
+        }
+    });
+    
+    renderList(filtered);
 });
 
-function selectCustomer(name) {
-    selectedCustomer = name;
-    document.querySelectorAll('.cust-item').forEach(el => {
-        el.classList.toggle('selected', el.querySelector('.cust-name').textContent === name);
-    });
+function selectTarget(element) {
+    const cust = element.dataset.customer;
+    const site = element.dataset.site || null;
+    selectedTarget = { customer: cust, site: site };
+    
+    document.querySelectorAll('.cust-item').forEach(el => el.classList.remove('selected'));
+    element.classList.add('selected');
+    
     const nameEl = document.getElementById('export-name');
-    nameEl.textContent = name;
+    nameEl.textContent = site ? `${cust} ➝ ${site}` : cust;
     nameEl.classList.remove('placeholder');
     updateExportHint();
     updateExportBtns();
@@ -635,7 +683,7 @@ function selectCustomer(name) {
 
 function updateExportHint() {
     const el = document.getElementById('export-hint');
-    if (!selectedCustomer) { el.textContent = 'Select a customer and columns above'; return; }
+    if (!selectedTarget) { el.textContent = 'Select a customer or site above'; return; }
     const n = selectedCols.size;
     el.textContent = n === 0
         ? 'No columns selected — pick at least one'
@@ -643,7 +691,7 @@ function updateExportHint() {
 }
 
 function updateExportBtns() {
-    const ok = !!selectedCustomer && selectedCols.size > 0;
+    const ok = !!selectedTarget && selectedCols.size > 0;
     document.getElementById('btn-csv').disabled = !ok;
     document.getElementById('btn-pdf').disabled = !ok;
 
@@ -652,17 +700,14 @@ function updateExportBtns() {
     document.getElementById('btn-all-pdf').disabled = !okAll;
 }
 
-// ── Export Builders ──
-// Grabs the columns directly from the DOM so it respects the user's drag-and-drop visual order
 function getOrderedColumns() {
     return Array.from(document.querySelectorAll('.col-chip.active'))
                 .map(chip => chip.dataset.key)
                 .join(',');
 }
 
-// ── Export single customer ──
 async function doExport(fmt) {
-    if (!selectedCustomer || selectedCols.size === 0) return;
+    if (!selectedTarget || selectedCols.size === 0) return;
 
     const btnId    = fmt === 'pdf' ? 'btn-pdf' : 'btn-csv';
     const btn      = document.getElementById(btnId);
@@ -678,14 +723,18 @@ async function doExport(fmt) {
     lockAllExport(true);
 
     document.getElementById('export-hint').textContent = `Fetching device data… this may take a moment`;
-    toast(`Preparing ${label} for ${selectedCustomer}…`, 'info', '⏳');
+    const targetName = selectedTarget.site ? selectedTarget.site : selectedTarget.customer;
+    toast(`Preparing ${label} for ${targetName}…`, 'info', '⏳');
 
     try {
         const orderedCols = getOrderedColumns();
-        const url  = `/api/export?customer=${encodeURIComponent(selectedCustomer)}&format=${fmt}&columns=${encodeURIComponent(orderedCols)}`;
+        const cArg = encodeURIComponent(selectedTarget.customer);
+        const sArg = selectedTarget.site ? `&site=${encodeURIComponent(selectedTarget.site)}` : '';
+        const url  = `/api/export?customer=${cArg}${sArg}&format=${fmt}&columns=${encodeURIComponent(orderedCols)}`;
+        
         await downloadFile(url, fmt);
         document.getElementById('export-hint').textContent = `Downloaded at ${new Date().toLocaleTimeString()}`;
-        toast(`${selectedCustomer} — ${label} downloaded`, 'success', '✅');
+        toast(`${targetName} — ${label} downloaded`, 'success', '✅');
     } catch (e) {
         document.getElementById('export-hint').textContent = `Export failed: ${e.message}`;
         toast(`Export failed: ${e.message}`, 'error', '⚠️');
@@ -697,7 +746,6 @@ async function doExport(fmt) {
     }
 }
 
-// ── Export all customers ──
 async function doExportAll(fmt) {
     if (selectedCols.size === 0) return;
 
@@ -734,7 +782,6 @@ async function doExportAll(fmt) {
     }
 }
 
-// ── Shared helpers ──
 async function downloadFile(url, fmt) {
     const res = await fetch(url);
     if (!res.ok) {
@@ -765,7 +812,6 @@ function lockSingleExport(locked) {
     });
 }
 
-// ── Init ──
 Promise.all([loadColumns(), loadCustomers()]);
 </script>
 </body>
