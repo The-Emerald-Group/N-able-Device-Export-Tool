@@ -28,9 +28,11 @@ except ImportError:
 # --- CONFIGURATION ---
 BASE_URL = "https://ncod153.n-able.com"
 JWT = os.environ.get("NABLE_TOKEN")
-CACHE_FILE = "customers_cache.json"
-CACHE_TTL = 300
+CACHE_FILE = "data/cache.json"
+CACHE_TTL = 86400
 ASSET_FETCH_DELAY = 0.15
+
+os.makedirs("data", exist_ok=True)
 
 cache_lock = threading.Lock()
 
@@ -247,9 +249,9 @@ def extract_all_fields(dev, detail, assets):
     }
 
 # ── Customer hierarchy cache ──────────────────────────────────────────────────
-def get_customers_list():
+def get_customers_list(force=False):
     with cache_lock:
-        if os.path.exists(CACHE_FILE):
+        if not force and os.path.exists(CACHE_FILE):
             try:
                 with open(CACHE_FILE, 'r') as f:
                     cached = json.load(f)
@@ -537,6 +539,14 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self._json(200, {'customers': get_customers_list()})
             except Exception as e:
+                self._json(500, {'error': str(e)})
+
+        elif path == '/api/sync-customers':
+            try:
+                items = get_customers_list(force=True)
+                self._json(200, {'customers': items})
+            except Exception as e:
+                log(f"Sync error: {e}\n{traceback.format_exc()}")
                 self._json(500, {'error': str(e)})
 
         elif path == '/api/export':
